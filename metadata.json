@@ -1,0 +1,6 @@
+{
+  "name": "Labirin Rusa Menuju Hutan",
+  "description": "Permainan edukatif labirin 5x5 mobile-first untuk anak usia dini: bantu rusa menemukan jalan pulang menuju hutan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

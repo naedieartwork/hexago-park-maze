@@ -1,0 +1,396 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Nunito', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: contain;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: 'Fredoka', 'Nunito', ui-rounded, system-ui, sans-serif;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible {
+    outline: 3px solid #f59e0b !important;
+    outline-offset: 2px !important;
+    box-shadow: 0 0 0 6px rgba(251, 191, 36, 0.38) !important;
+  }
+}
+
+/* Animasi CSS berbasis frame-keyframe untuk komponen KawaiiCharacterIcon */
+@keyframes kawaii-idle-breathe {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scaleX(1) scaleY(1);
+  }
+  25% {
+    transform: translate3d(0, -0.8px, 0) scaleX(1.016) scaleY(1.018);
+  }
+  50% {
+    transform: translate3d(0, -1.8px, 0) scaleX(1.032) scaleY(1.038);
+  }
+  75% {
+    transform: translate3d(0, -0.7px, 0) scaleX(1.015) scaleY(1.014);
+  }
+}
+
+@keyframes kawaii-move-bounce {
+  0% {
+    transform: translate3d(0, 0, 0) scaleX(1) scaleY(1) rotate(0deg);
+  }
+  16% {
+    transform: translate3d(0, 2.4px, 0) scaleX(1.13) scaleY(0.86) rotate(-2deg);
+  }
+  44% {
+    transform: translate3d(0, -10px, 0) scaleX(0.92) scaleY(1.12) rotate(3.5deg);
+  }
+  70% {
+    transform: translate3d(0, 2px, 0) scaleX(1.09) scaleY(0.91) rotate(-1.8deg);
+  }
+  86% {
+    transform: translate3d(0, -2.5px, 0) scaleX(0.98) scaleY(1.03) rotate(0.8deg);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scaleX(1) scaleY(1) rotate(0deg);
+  }
+}
+
+@keyframes kawaii-cheer-bounce {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scaleX(1) scaleY(1) rotate(0deg);
+  }
+  22% {
+    transform: translate3d(0, 1.4px, 0) scaleX(1.06) scaleY(0.94) rotate(-2deg);
+  }
+  52% {
+    transform: translate3d(0, -5.5px, 0) scaleX(0.96) scaleY(1.06) rotate(2.5deg);
+  }
+  78% {
+    transform: translate3d(0, 1px, 0) scaleX(1.03) scaleY(0.97) rotate(-1deg);
+  }
+}
+
+@keyframes kawaii-dizzy-wobble {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scaleX(1) scaleY(1);
+  }
+  25% {
+    transform: translate3d(-2.4px, 0.8px, 0) rotate(-5deg) scaleX(1.03) scaleY(0.96);
+  }
+  75% {
+    transform: translate3d(2.4px, 0.8px, 0) rotate(5deg) scaleX(1.03) scaleY(0.96);
+  }
+}
+
+@keyframes kawaii-shadow-idle {
+  0%, 100% {
+    transform: scaleX(1) scaleY(1);
+    opacity: 0.14;
+  }
+  50% {
+    transform: scaleX(0.93) scaleY(0.92);
+    opacity: 0.1;
+  }
+}
+
+@keyframes kawaii-shadow-bounce {
+  0%, 100% {
+    transform: scaleX(1) scaleY(1);
+    opacity: 0.14;
+  }
+  16% {
+    transform: scaleX(1.12) scaleY(1.05);
+    opacity: 0.18;
+  }
+  44% {
+    transform: scaleX(0.66) scaleY(0.75);
+    opacity: 0.05;
+  }
+  70% {
+    transform: scaleX(1.08) scaleY(1.04);
+    opacity: 0.17;
+  }
+}
+
+.kawaii-char-svg {
+  overflow: visible;
+}
+
+.kawaii-char-body {
+  transform-box: view-box;
+  transform-origin: 40px 72px;
+  transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  will-change: transform;
+}
+
+.kawaii-char-idle {
+  animation: kawaii-idle-breathe 3s ease-in-out infinite;
+}
+
+.kawaii-char-moving {
+  animation: kawaii-move-bounce 0.38s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.kawaii-char-cheer {
+  animation: kawaii-cheer-bounce 1.05s ease-in-out infinite;
+}
+
+.kawaii-char-dizzy {
+  animation: kawaii-dizzy-wobble 0.48s ease-in-out infinite;
+}
+
+.kawaii-char-shadow {
+  transform-box: view-box;
+  transform-origin: 40px 74px;
+  transition: transform 220ms ease, opacity 220ms ease;
+}
+
+.kawaii-char-shadow-idle {
+  animation: kawaii-shadow-idle 3s ease-in-out infinite;
+}
+
+.kawaii-char-shadow-moving {
+  animation: kawaii-shadow-bounce 0.38s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kawaii-char-body,
+  .kawaii-char-idle,
+  .kawaii-char-moving,
+  .kawaii-char-cheer,
+  .kawaii-char-dizzy,
+  .kawaii-char-shadow,
+  .kawaii-char-shadow-idle,
+  .kawaii-char-shadow-moving,
+  .prologue-breathe,
+  .prologue-head-nod,
+  .prologue-eye-blink,
+  .prologue-eyelid-blink,
+  .gpu-confetti-piece,
+  .gpu-firefly-particle,
+  .gpu-leaf-particle,
+  .gpu-cloud-drift,
+  .gpu-animal-bob {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Animasi karakter hidup (Idle & Speaking Motion + Natural Blink) untuk Layar Prolog & Penutup */
+@keyframes prologue-breathe {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scaleY(1);
+  }
+  50% {
+    transform: translate3d(0, -2px, 0) scaleY(1.014);
+  }
+}
+
+@keyframes prologue-head-nod {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  25% {
+    transform: translate3d(0, 1.2px, 0) rotate(1.7deg);
+  }
+  55% {
+    transform: translate3d(0, -0.8px, 0) rotate(-1.4deg);
+  }
+  80% {
+    transform: translate3d(0, 0.9px, 0) rotate(1.1deg);
+  }
+}
+
+@keyframes prologue-eye-blink {
+  0%, 91%, 100% {
+    transform: translateZ(0) scaleY(1);
+  }
+  95% {
+    transform: translateZ(0) scaleY(0.1);
+  }
+  98.5% {
+    transform: translateZ(0) scaleY(1);
+  }
+}
+
+@keyframes prologue-eyelid-blink {
+  0%, 91% {
+    opacity: 0;
+    transform: translateZ(0) scaleY(0);
+  }
+  92% {
+    opacity: 1;
+    transform: translateZ(0) scaleY(0.25);
+  }
+  95% {
+    opacity: 1;
+    transform: translateZ(0) scaleY(1);
+  }
+  98% {
+    opacity: 1;
+    transform: translateZ(0) scaleY(0.15);
+  }
+  99%, 100% {
+    opacity: 0;
+    transform: translateZ(0) scaleY(0);
+  }
+}
+
+.prologue-breathe {
+  transform-origin: bottom center;
+  animation: prologue-breathe 3s ease-in-out infinite;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.prologue-head-group {
+  transform-box: view-box;
+  transition: transform 240ms ease-out;
+  will-change: transform;
+}
+
+.prologue-head-nod {
+  animation: prologue-head-nod 1.15s ease-in-out infinite;
+}
+
+.prologue-eye-blink {
+  transform-box: view-box;
+  animation: prologue-eye-blink 3.8s ease-in-out infinite;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.prologue-eyelid-blink {
+  transform-box: view-box;
+  opacity: 0;
+  animation: prologue-eyelid-blink 3.8s ease-in-out infinite;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+/* ============================================================================
+ * GPU-Accelerated Particles (hanya transform & opacity, tanpa layout reflow)
+ * ============================================================================ */
+@keyframes gpu-confetti-fall {
+  0% {
+    transform: translate3d(0, -6vh, 0) rotate(0deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.92;
+  }
+  50% {
+    transform: translate3d(var(--confetti-sway, 16px), 50vh, 0) rotate(180deg);
+    opacity: 0.92;
+  }
+  90% {
+    opacity: 0.85;
+  }
+  100% {
+    transform: translate3d(0, 106vh, 0) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+.gpu-confetti-piece {
+  top: 0;
+  animation: gpu-confetti-fall 4s linear infinite;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+@keyframes gpu-firefly-float {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(0.82);
+    opacity: 0.28;
+  }
+  35% {
+    transform: translate3d(var(--fly-x, 14px), var(--fly-y, -14px), 0) scale(1.22);
+    opacity: 0.96;
+  }
+  70% {
+    transform: translate3d(calc(var(--fly-x, 14px) * -0.45), calc(var(--fly-y, -14px) * 0.4), 0) scale(0.92);
+    opacity: 0.45;
+  }
+}
+
+.gpu-firefly-particle {
+  animation: gpu-firefly-float 5s ease-in-out infinite;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+@keyframes gpu-leaf-fall {
+  0% {
+    transform: translate3d(0, -8vh, 0) rotate(0deg);
+    opacity: 0;
+  }
+  12% {
+    opacity: var(--peak-opacity, 0.72);
+  }
+  50% {
+    transform: translate3d(var(--sway-x, 20px), 50vh, 0) rotate(170deg);
+    opacity: var(--peak-opacity, 0.72);
+  }
+  88% {
+    opacity: var(--peak-opacity, 0.72);
+  }
+  100% {
+    transform: translate3d(var(--drift-end-x, calc(var(--sway-x, 20px) * -0.4)), 108vh, 0) rotate(340deg);
+    opacity: 0;
+  }
+}
+
+.gpu-leaf-particle {
+  top: 0;
+  animation: gpu-leaf-fall 10s linear infinite;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+@keyframes gpu-cloud-drift {
+  0% {
+    transform: translate3d(-28vw, 0, 0);
+    opacity: 0;
+  }
+  8% {
+    opacity: var(--cloud-opacity, 0.65);
+  }
+  50% {
+    transform: translate3d(48vw, var(--cloud-bob, 5px), 0);
+    opacity: var(--cloud-opacity, 0.65);
+  }
+  92% {
+    opacity: var(--cloud-opacity, 0.65);
+  }
+  100% {
+    transform: translate3d(122vw, 0, 0);
+    opacity: 0;
+  }
+}
+
+.gpu-cloud-drift {
+  left: 0;
+  animation: gpu-cloud-drift 48s linear infinite;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+@keyframes gpu-animal-cheer-bob {
+  0%, 100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -4px, 0);
+  }
+}
+
+.gpu-animal-bob {
+  animation: gpu-animal-cheer-bob 2.2s ease-in-out infinite;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+
