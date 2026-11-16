@@ -14,6 +14,7 @@ type KeyboardSettingsPanelProps = {
   onResetBindings: () => void;
   onToggleShowShortcutLabels: () => void;
   onRecordingChange?: (isRecording: boolean) => void;
+  embedded?: boolean;
 };
 
 const IGNORED_MODIFIER_CODES = new Set([
@@ -37,6 +38,7 @@ export const KeyboardSettingsPanel: React.FC<KeyboardSettingsPanelProps> = ({
   onResetBindings,
   onToggleShowShortcutLabels,
   onRecordingChange,
+  embedded = false,
 }) => {
   const [recordingAction, setRecordingAction] = useState<KeyActionId | null>(
     null
@@ -77,15 +79,15 @@ export const KeyboardSettingsPanel: React.FC<KeyboardSettingsPanelProps> = ({
   }, [lastUpdatedAction]);
 
   return (
-    <div className="space-y-3 text-left">
+    <div className="space-y-2.5 text-left">
       {/* Toggle Label Pintasan di Layar */}
-      <div className="rounded-2xl bg-sky-50/90 border border-sky-200 p-3 flex items-center justify-between gap-2.5">
+      <div className="rounded-xl bg-sky-50/90 border border-sky-200 p-2.5 flex items-center justify-between gap-2.5">
         <div className="min-w-0">
           <p className="text-xs font-extrabold text-sky-950">
             Tampilkan Label Tombol
           </p>
           <p className="text-[11px] font-bold text-sky-800/80 leading-snug mt-0.5">
-            Tampilkan petunjuk pintasan tombol pada tombol aksi sebagai panduan visual.
+            Tampilkan petunjuk pintasan pada tombol aksi.
           </p>
         </div>
         <button
@@ -116,10 +118,9 @@ export const KeyboardSettingsPanel: React.FC<KeyboardSettingsPanelProps> = ({
       </div>
 
       {/* Info & Tombol Reset ke Default */}
-      <div className="flex items-center justify-between gap-2 px-1">
+      <div className="flex items-center justify-between gap-2 px-0.5">
         <p className="text-[11px] font-bold text-stone-600 leading-snug">
-          Klik <strong>Ubah</strong> lalu tekan tombol fisik Keyboard/Numpad OTG
-          (NumLock ON/OFF).
+          Klik <strong>Ubah</strong> lalu tekan tombol Keyboard / Numpad OTG.
         </p>
         <button
           type="button"
@@ -129,12 +130,16 @@ export const KeyboardSettingsPanel: React.FC<KeyboardSettingsPanelProps> = ({
           }}
           className="shrink-0 px-2.5 py-1.5 rounded-xl bg-rose-100 hover:bg-rose-200 border border-rose-300 text-rose-800 text-[11px] font-extrabold transition-colors cursor-pointer"
         >
-          Reset ke Default
+          Reset
         </button>
       </div>
 
       {/* Daftar Pemetaan Tombol */}
-      <div className="space-y-2 max-h-[250px] overflow-y-auto pr-1">
+      <div
+        className={`space-y-1.5 ${
+          embedded ? '' : 'max-h-[250px] overflow-y-auto pr-1'
+        }`}
+      >
         {KEY_ACTION_META_LIST.map((meta) => {
           const isRecording = recordingAction === meta.id;
           const isJustUpdated = lastUpdatedAction === meta.id;

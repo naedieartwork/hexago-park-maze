@@ -155,6 +155,23 @@
   animation: kawaii-shadow-bounce 0.38s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
+@keyframes kawaii-invulnerable-blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  25%, 75% {
+    opacity: 0.22;
+  }
+  50% {
+    opacity: 0.92;
+  }
+}
+
+.kawaii-invulnerable-blink {
+  animation: kawaii-invulnerable-blink 0.28s linear infinite;
+  will-change: opacity;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .kawaii-char-body,
   .kawaii-char-idle,
@@ -164,6 +181,7 @@
   .kawaii-char-shadow,
   .kawaii-char-shadow-idle,
   .kawaii-char-shadow-moving,
+  .kawaii-invulnerable-blink,
   .prologue-breathe,
   .prologue-head-nod,
   .prologue-eye-blink,
@@ -175,6 +193,10 @@
   .gpu-animal-bob {
     animation: none !important;
     transition: none !important;
+  }
+
+  .kawaii-invulnerable-blink {
+    opacity: 0.65;
   }
 }
 

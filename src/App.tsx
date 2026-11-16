@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import confetti from 'canvas-confetti';
-import { Volume2 } from 'lucide-react';
+import { Volume2, X } from 'lucide-react';
 import {
   LeaderboardModal,
   INITIAL_LEADERBOARD_MOCK,
@@ -55,7 +55,7 @@ import {
 } from './components/KawaiiCharacters';
 import { BonusFireflyValleyModal } from './components/BonusFireflyValleyModal';
 import { EndingScreen } from './components/EndingScreen';
-import { KeyboardSettingsPanel } from './components/KeyboardSettingsPanel';
+import { GameSettingsModalContent } from './components/GameSettingsModalContent';
 import {
   activateFocusedOrDefault,
   cloneDefaultKeyBindings,
@@ -85,6 +85,15 @@ import {
   verifyAndActivateLicenseRpc,
   type StoredLicenseSession,
 } from './utils/licenseManager';
+import {
+  DIFFICULTY_CONFIGS,
+  INVULNERABILITY_DURATION_MS,
+  getEffectiveTimeLimitSeconds,
+  getMovingObstacleIntervalMs,
+  loadSavedDifficulty,
+  saveDifficulty,
+  type GameDifficulty,
+} from './utils/difficultyConfig';
 
 type Position = {
   row: number;
@@ -471,8 +480,7 @@ const OBSTACLE_TILE_STYLES: Record<ObstacleKind, string> = {
 };
 
 const MAX_SESSION_HINTS = 3;
-const MAX_WALL_BUMPS = 3;
-const MAX_LIVES = 3;
+const BASE_MOVING_OBSTACLE_INTERVAL_MS = 1200;
 
 const cloneGrid = (grid: number[][]): number[][] =>
   grid.map((row) => [...row]);
@@ -752,10 +760,83 @@ const solveMissionPath = (
   };
 };
 
+const thinObstaclesSpreadOut = (
+  grid: number[][],
+  obstacleRatio: number
+): number[][] => {
+  if (obstacleRatio >= 1) {
+    return grid;
+  }
+
+  const walls: Position[] = [];
+  for (let r = 0; r < grid.length; r += 1) {
+    for (let c = 0; c < grid[r].length; c += 1) {
+      if (grid[r][c] === 1) {
+        walls.push({ row: r, col: c });
+      }
+    }
+  }
+
+  if (walls.length <= 1) {
+    return grid;
+  }
+
+  const targetCount = Math.max(1, Math.round(walls.length * obstacleRatio));
+  if (targetCount >= walls.length) {
+    return grid;
+  }
+
+  // Acak urutan awal lalu pilih rintangan yang paling berjauhan (farthest-point spacing)
+  const remaining = shuffleArray(walls);
+  const selected: Position[] = [remaining.shift()!];
+
+  while (selected.length < targetCount && remaining.length > 0) {
+    let bestIdx = 0;
+    let bestScore = -1;
+
+    for (let i = 0; i < remaining.length; i += 1) {
+      const candidate = remaining[i];
+      let minSqDist = Infinity;
+      let sumSqDist = 0;
+      for (const kept of selected) {
+        const dr = candidate.row - kept.row;
+        const dc = candidate.col - kept.col;
+        const sqDist = dr * dr + dc * dc;
+        if (sqDist < minSqDist) minSqDist = sqDist;
+        sumSqDist += sqDist;
+      }
+      // Prioritaskan jarak minimum terbesar agar rintangan tersebar merata, tidak menumpuk
+      const score = minSqDist * 1000 + sumSqDist;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+
+    selected.push(remaining.splice(bestIdx, 1)[0]);
+  }
+
+  const keptKeys = new Set(selected.map((p) => `${p.row}-${p.col}`));
+  const thinned = cloneGrid(grid);
+  for (const w of walls) {
+    if (!keptKeys.has(`${w.row}-${w.col}`)) {
+      thinned[w.row][w.col] = 0;
+    }
+  }
+  return thinned;
+};
+
 const generateRandomMaze = (
   config: LevelConfig,
+  difficulty: GameDifficulty = 'hard',
   previousSignature?: string
 ): GeneratedMaze => {
+  const obstacleRatio =
+    DIFFICULTY_CONFIGS[difficulty]?.obstacleRatio ?? 1.0;
+  const effectiveMinSteps =
+    obstacleRatio >= 1
+      ? config.minSteps
+      : Math.max(2, Math.round(config.minSteps * (0.45 + 0.55 * obstacleRatio)));
   const SIZE = config.gridSize;
   const maxCoord = SIZE - 1;
   const midCoord = Math.floor(SIZE / 2);
@@ -890,34 +971,40 @@ const generateRandomMaze = (
       }
     }
 
-    const sig = gridSignature(grid);
+    const finalGrid = thinObstaclesSpreadOut(grid, obstacleRatio);
+    const sig = gridSignature(finalGrid);
     if (previousSignature && sig === previousSignature) continue;
 
-    const shortestPath = findSafePathToGoal(grid, start);
+    const shortestPath = findSafePathToGoal(finalGrid, start);
     if (shortestPath.size === 0) continue;
 
     const collectibles = placeCollectiblesForGrid(
-      grid,
+      finalGrid,
       start,
       config.collectibleCount
     );
-    const missionSolution = solveMissionPath(grid, start, collectibles, 0);
+    const missionSolution = solveMissionPath(
+      finalGrid,
+      start,
+      collectibles,
+      0
+    );
     if (!missionSolution) continue;
 
     const stepCount = shortestPath.size - 1;
     const candidate: GeneratedMaze = {
-      grid,
+      grid: finalGrid,
       startPos: start,
       initialFacing: start.col >= midCoord ? 'LEFT' : 'RIGHT',
       collectibles,
       optimalSteps: missionSolution.totalSteps,
     };
 
-    if (stepCount >= config.minSteps && stepCount <= config.maxSteps) {
+    if (stepCount >= effectiveMinSteps && stepCount <= config.maxSteps) {
       return candidate;
     }
 
-    const targetMid = (config.minSteps + config.maxSteps) / 2;
+    const targetMid = (effectiveMinSteps + config.maxSteps) / 2;
     const score = Math.abs(stepCount - targetMid);
     if (score < bestScore) {
       bestScore = score;
@@ -929,7 +1016,10 @@ const generateRandomMaze = (
     return bestCandidate;
   }
 
-  const fallbackGrid = cloneGrid(config.fallbackGrid);
+  const fallbackGrid = thinObstaclesSpreadOut(
+    cloneGrid(config.fallbackGrid),
+    obstacleRatio
+  );
   const fallbackCollectibles = placeCollectiblesForGrid(
     fallbackGrid,
     config.fallbackStart,
@@ -946,7 +1036,7 @@ const generateRandomMaze = (
     startPos: config.fallbackStart,
     initialFacing: config.fallbackStart.col >= midCoord ? 'LEFT' : 'RIGHT',
     collectibles: fallbackCollectibles,
-    optimalSteps: fallbackSolution?.totalSteps ?? config.minSteps,
+    optimalSteps: fallbackSolution?.totalSteps ?? effectiveMinSteps,
   };
 };
 
@@ -1131,11 +1221,25 @@ const STAR_SPARKLE_OFFSETS = [
 ];
 
 export default function App() {
+  const [difficulty, setDifficulty] = useState<GameDifficulty>(() =>
+    loadSavedDifficulty()
+  );
+  const difficultyConfig = DIFFICULTY_CONFIGS[difficulty];
+  const maxLives = difficultyConfig.lives;
+  const effectiveMovingObstacleIntervalMs = getMovingObstacleIntervalMs(
+    BASE_MOVING_OBSTACLE_INTERVAL_MS,
+    difficulty
+  );
+
   const [level, setLevel] = useState<number>(1);
   const currentLevelConfig = LEVELS[level - 1];
+  const effectiveTimeLimit = getEffectiveTimeLimitSeconds(
+    currentLevelConfig.timeLimitSeconds,
+    difficulty
+  );
 
   const [initialSetup] = useState<GeneratedMaze>(() =>
-    generateRandomMaze(LEVELS[0])
+    generateRandomMaze(LEVELS[0], loadSavedDifficulty())
   );
 
   const [maze, setMaze] = useState<number[][]>(initialSetup.grid);
@@ -1153,11 +1257,16 @@ export default function App() {
   const [optimalSteps, setOptimalSteps] = useState<number>(
     initialSetup.optimalSteps
   );
-  const [timeLeft, setTimeLeft] = useState<number>(
-    LEVELS[0].timeLimitSeconds
+  const [timeLeft, setTimeLeft] = useState<number>(() =>
+    getEffectiveTimeLimitSeconds(
+      LEVELS[0].timeLimitSeconds,
+      loadSavedDifficulty()
+    )
   );
-  const [lives, setLives] = useState<number>(MAX_LIVES);
-  const [bumpCount, setBumpCount] = useState<number>(0);
+  const [lives, setLives] = useState<number>(
+    () => DIFFICULTY_CONFIGS[loadSavedDifficulty()].lives
+  );
+  const [isInvulnerable, setIsInvulnerable] = useState<boolean>(false);
   const [bumpAnimTick, setBumpAnimTick] = useState<number>(0);
   const [isDizzyPenalty, setIsDizzyPenalty] = useState<boolean>(false);
   const [isTimeUp, setIsTimeUp] = useState<boolean>(false);
@@ -1229,6 +1338,8 @@ export default function App() {
     lostIndex: number;
     tick: number;
   } | null>(null);
+  const [isBoardFlashingRed, setIsBoardFlashingRed] = useState<boolean>(false);
+  const [boardFlashTick, setBoardFlashTick] = useState<number>(0);
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [isExitConfirmOpen, setIsExitConfirmOpen] = useState<boolean>(false);
   const [isGameSettingsOpen, setIsGameSettingsOpen] = useState<boolean>(false);
@@ -1280,9 +1391,6 @@ export default function App() {
   const [showShortcutLabels, setShowShortcutLabels] = useState<boolean>(() =>
     loadShowShortcutLabels()
   );
-  const [inGameSettingsTab, setInGameSettingsTab] = useState<
-    'general' | 'keyboard'
-  >('general');
   const [isRecordingInGameKey, setIsRecordingInGameKey] =
     useState<boolean>(false);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() =>
@@ -1308,7 +1416,12 @@ export default function App() {
   const pauseModalRef = useRef<HTMLDivElement | null>(null);
   const endLevelRef = useRef<HTMLElement | null>(null);
   const openedSettingsViaShutterRef = useRef<boolean>(false);
-  const prevTimeLeftRef = useRef<number>(LEVELS[0].timeLimitSeconds);
+  const prevTimeLeftRef = useRef<number>(
+    getEffectiveTimeLimitSeconds(
+      LEVELS[0].timeLimitSeconds,
+      loadSavedDifficulty()
+    )
+  );
   const prevModalStatesRef = useRef<{
     isGameSettingsOpen: boolean;
     isPaused: boolean;
@@ -1338,7 +1451,6 @@ export default function App() {
 
   useEffect(() => {
     if (!isGameSettingsOpen) {
-      setInGameSettingsTab('general');
       setIsRecordingInGameKey(false);
     }
   }, [isGameSettingsOpen]);
@@ -1714,17 +1826,53 @@ export default function App() {
 
   const isOverlayFlowActive = screenState !== 'PLAYING' || isEndingOpen;
   const bumpTimeoutRef = useRef<number | null>(null);
+  const invulnerableUntilRef = useRef<number>(0);
+  const invulnerableTimeoutRef = useRef<number | null>(null);
   const confettiTimeoutRef = useRef<number | null>(null);
   const hintTimeoutRef = useRef<number | null>(null);
   const shareTimeoutRef = useRef<number | null>(null);
   const dpadTimeoutRef = useRef<number | null>(null);
   const lifeBounceTimeoutRef = useRef<number | null>(null);
+  const boardFlashTimeoutRef = useRef<number | null>(null);
   const particleIdRef = useRef<number>(0);
   const particleTimeoutsRef = useRef<Set<number>>(new Set());
   const collectedPopupIdRef = useRef<number>(0);
   const collectedPopupTimeoutsRef = useRef<Set<number>>(new Set());
   const goalCellRef = useRef<HTMLDivElement | null>(null);
   const fireworkTickRef = useRef<number>(0);
+
+  const clearInvulnerability = useCallback(() => {
+    if (invulnerableTimeoutRef.current !== null) {
+      window.clearTimeout(invulnerableTimeoutRef.current);
+      invulnerableTimeoutRef.current = null;
+    }
+    invulnerableUntilRef.current = 0;
+    setIsInvulnerable(false);
+  }, []);
+
+  const triggerInvulnerability = useCallback(() => {
+    if (invulnerableTimeoutRef.current !== null) {
+      window.clearTimeout(invulnerableTimeoutRef.current);
+    }
+    invulnerableUntilRef.current = Date.now() + INVULNERABILITY_DURATION_MS;
+    setIsInvulnerable(true);
+    invulnerableTimeoutRef.current = window.setTimeout(() => {
+      invulnerableTimeoutRef.current = null;
+      invulnerableUntilRef.current = 0;
+      setIsInvulnerable(false);
+    }, INVULNERABILITY_DURATION_MS);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (invulnerableTimeoutRef.current !== null) {
+        window.clearTimeout(invulnerableTimeoutRef.current);
+      }
+      if (bumpTimeoutRef.current !== null) {
+        window.clearTimeout(bumpTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const triggerBumpFeedback = useCallback((message: string) => {
     setFeedbackText(message);
@@ -1879,13 +2027,19 @@ export default function App() {
   );
 
   const loadLevel = useCallback(
-    (targetLevel: number) => {
+    (targetLevel: number, overrideDifficulty?: GameDifficulty) => {
       if (confettiTimeoutRef.current !== null) {
         window.clearTimeout(confettiTimeoutRef.current);
         confettiTimeoutRef.current = null;
       }
       narrator.stop();
       narrator.resetCollisionCooldown();
+      clearInvulnerability();
+      if (boardFlashTimeoutRef.current !== null) {
+        window.clearTimeout(boardFlashTimeoutRef.current);
+        boardFlashTimeoutRef.current = null;
+      }
+      setIsBoardFlashingRed(false);
       if (hintTimeoutRef.current !== null) {
         window.clearTimeout(hintTimeoutRef.current);
         hintTimeoutRef.current = null;
@@ -1902,8 +2056,17 @@ export default function App() {
         // Abaikan jika canvas belum diinisialisasi
       }
 
+      const activeDifficulty = overrideDifficulty ?? difficulty;
       const config = LEVELS[targetLevel - 1] ?? LEVELS[0];
-      const nextMaze = generateRandomMaze(config, gridSignature(maze));
+      const nextMaze = generateRandomMaze(
+        config,
+        activeDifficulty,
+        gridSignature(maze)
+      );
+      const nextTimeLimit = getEffectiveTimeLimitSeconds(
+        config.timeLimitSeconds,
+        activeDifficulty
+      );
 
       setLevel(config.level);
       setMaze(nextMaze.grid);
@@ -1915,8 +2078,8 @@ export default function App() {
       );
       setSteps(0);
       setOptimalSteps(nextMaze.optimalSteps);
-      setTimeLeft(config.timeLimitSeconds);
-      setBumpCount(0);
+      prevTimeLeftRef.current = nextTimeLimit;
+      setTimeLeft(nextTimeLimit);
       setIsDizzyPenalty(false);
       setIsTimeUp(false);
       setHasWon(false);
@@ -1944,7 +2107,24 @@ export default function App() {
       setLastMoveTick((prev) => prev + 1);
       setFeedbackText(config.missionText);
     },
-    [clearCollectedPopups, clearTrailParticles, level, maze]
+    [
+      clearCollectedPopups,
+      clearInvulnerability,
+      clearTrailParticles,
+      difficulty,
+      level,
+      maze,
+    ]
+  );
+
+  const handleChangeDifficulty = useCallback(
+    (nextDifficulty: GameDifficulty) => {
+      setDifficulty(nextDifficulty);
+      saveDifficulty(nextDifficulty);
+      setLives(DIFFICULTY_CONFIGS[nextDifficulty].lives);
+      loadLevel(1, nextDifficulty);
+    },
+    [loadLevel]
   );
 
   const advanceGroupTurn = useCallback(
@@ -2107,7 +2287,7 @@ export default function App() {
         score: effortScore,
         steps,
         optimalSteps,
-        timeUsedSeconds: currentLevelConfig.timeLimitSeconds,
+        timeUsedSeconds: effectiveTimeLimit,
         itemsCollected: collectedIndices.size,
         totalItems: collectibles.length,
         completed: false,
@@ -2130,7 +2310,7 @@ export default function App() {
         stepsTaken: steps,
         optimalSteps,
         timeLeft: 0,
-        timeLimit: currentLevelConfig.timeLimitSeconds,
+        timeLimit: effectiveTimeLimit,
       })
     );
   }, [
@@ -2139,8 +2319,8 @@ export default function App() {
     collectibles.length,
     currentLevelConfig.characterKey,
     currentLevelConfig.characterName,
-    currentLevelConfig.timeLimitSeconds,
     currentPlayerIndex,
+    effectiveTimeLimit,
     gameMode,
     groupPlayers,
     hasWon,
@@ -2340,7 +2520,7 @@ export default function App() {
   const resetGame = useCallback(() => {
     narrator.stop();
     if (lives <= 0) {
-      setLives(MAX_LIVES);
+      setLives(maxLives);
       setLevelBestScores({});
       setLevelBestStars({});
       setHintsLeft(MAX_SESSION_HINTS);
@@ -2354,7 +2534,7 @@ export default function App() {
     if (screenState === 'PLAYING') {
       narrator.playLevelIntroVoice(level);
     }
-  }, [level, lives, loadLevel, screenState]);
+  }, [level, lives, loadLevel, maxLives, screenState]);
 
   const maybeShowDidYouKnowBetweenLevels = useCallback((targetLevel: number) => {
     const config = LEVELS[targetLevel - 1] ?? LEVELS[0];
@@ -2374,7 +2554,7 @@ export default function App() {
     (targetLevel: number, mode: GameMode) => {
       if (mode === 'group') {
         loadLevel(targetLevel);
-        setLives(MAX_LIVES);
+        setLives(maxLives);
         setCurrentPlayerIndex(0);
         setGroupTurnResults([]);
         setPreviousTurnResult(null);
@@ -2382,7 +2562,7 @@ export default function App() {
         setScreenState('TRANSITION');
       } else {
         if (targetLevel === 1 && level >= LEVELS.length) {
-          setLives(MAX_LIVES);
+          setLives(maxLives);
           setLevelBestScores({});
           setLevelBestStars({});
           setHintsLeft(MAX_SESSION_HINTS);
@@ -2395,7 +2575,7 @@ export default function App() {
         }
       }
     },
-    [groupPlayers, level, loadLevel, maybeShowDidYouKnowBetweenLevels]
+    [groupPlayers, level, loadLevel, maxLives, maybeShowDidYouKnowBetweenLevels]
   );
 
   const handleNextLevel = useCallback(() => {
@@ -2416,6 +2596,7 @@ export default function App() {
 
     // Jika melewati batas gratis berdasarkan nomor level & mode game, picu event untuk membuka LicensePopup
     if (isExceedingFreeLimit) {
+      licensePopupSourceRef.current = 'gate';
       pendingLevelTransitionRef.current = () => {
         executeLevelTransition(nextLevel, gameMode);
       };
@@ -2460,13 +2641,13 @@ export default function App() {
     setHintCells(new Set());
     clearTrailParticles();
     clearCollectedPopups();
-    setLives(MAX_LIVES);
+    setLives(maxLives);
     setLevelBestScores({});
     setLevelBestStars({});
     setHintsLeft(MAX_SESSION_HINTS);
     loadLevel(1);
     setScreenState('SCREEN_COVER');
-  }, [clearCollectedPopups, clearTrailParticles, loadLevel]);
+  }, [clearCollectedPopups, clearTrailParticles, loadLevel, maxLives]);
 
   const licenseSessionRef = useRef<StoredLicenseSession | null>(licenseSession);
   useEffect(() => {
@@ -2586,10 +2767,20 @@ export default function App() {
     []
   );
 
+  const licensePopupSourceRef = useRef<'gate' | 'settings'>('gate');
+
   const handleCloseLicensePopup = useCallback(() => {
-    narrator.stop();
+    const openedFromSettings = licensePopupSourceRef.current === 'settings';
+    licensePopupSourceRef.current = 'gate';
     pendingLevelTransitionRef.current = null;
     setIsLicensePopupOpen(false);
+    window.dispatchEvent(new CustomEvent('close-license-popup'));
+
+    if (openedFromSettings) {
+      return;
+    }
+
+    narrator.stop();
     setIsGameSettingsOpen(false);
     setHasWon(false);
     setGoalFireworkBurst(null);
@@ -2604,7 +2795,6 @@ export default function App() {
     setIsAppreciationOpen(false);
     setIsDidYouKnowOpen(false);
     setScreenState('SCREEN_COVER');
-    window.dispatchEvent(new CustomEvent('close-license-popup'));
   }, []);
 
   const handleCancelExitToCover = useCallback(() => {
@@ -2632,11 +2822,27 @@ export default function App() {
     setGoalFireworkBurst(null);
     setIsTimeUp(false);
     setIsDizzyPenalty(false);
+    clearInvulnerability();
     setHintCells(new Set());
     clearTrailParticles();
     clearCollectedPopups();
     setScreenState('SCREEN_COVER');
-  }, [clearCollectedPopups, clearTrailParticles]);
+  }, [clearCollectedPopups, clearInvulnerability, clearTrailParticles]);
+
+  const handleOpenLicenseModalFromSettings = useCallback(() => {
+    licensePopupSourceRef.current = 'settings';
+    pendingLevelTransitionRef.current = null;
+    window.dispatchEvent(
+      new CustomEvent('open-license-popup', {
+        detail: {
+          source: 'settings',
+          currentLevel: level,
+          gameMode,
+        },
+      })
+    );
+    setIsLicensePopupOpen(true);
+  }, [gameMode, level]);
 
   const handleToggleLicenseStatus = useCallback(() => {
     if (isLicenseActive) {
@@ -2651,18 +2857,8 @@ export default function App() {
       return;
     }
 
-    pendingLevelTransitionRef.current = null;
-    window.dispatchEvent(
-      new CustomEvent('open-license-popup', {
-        detail: {
-          source: 'settings',
-          currentLevel: level,
-          gameMode,
-        },
-      })
-    );
-    setIsLicensePopupOpen(true);
-  }, [gameMode, isLicenseActive, level, loadLevel]);
+    handleOpenLicenseModalFromSettings();
+  }, [gameMode, handleOpenLicenseModalFromSettings, isLicenseActive, level, loadLevel]);
 
   const handleShareResult = useCallback(async () => {
     const shareTitle = `Game Labirin: ${currentLevelConfig.characterName} ke ${currentLevelConfig.destinationName}`;
@@ -2742,23 +2938,53 @@ export default function App() {
   ]);
 
   const handleCollisionPenalty = useCallback(
-    (baseMessage: string) => {
-      sfxEngine.playBump();
-      const nextBumps = bumpCount + 1;
-      setBumpCount(nextBumps);
+    (baseMessage: string, obstacleKind?: ObstacleKind) => {
+      sfxEngine.playObstacleBump(obstacleKind);
 
-      if (nextBumps > MAX_WALL_BUMPS) {
+      // Jeda kebal sementara 1.5 detik agar satu tabrakan tidak mengurangi beberapa nyawa sekaligus
+      const now = Date.now();
+      if (invulnerableUntilRef.current > now) {
+        triggerBumpFeedback(
+          'Sedang kebal sebentar! Ayo belok ke jalan terbuka ya!'
+        );
+        return;
+      }
+
+      const nextLives = Math.max(0, lives - 1);
+      setLives(nextLives);
+      if (nextLives < lives) {
+        setLifeLostAnim((prev) => ({
+          lostIndex: nextLives,
+          tick: (prev?.tick ?? 0) + 1,
+        }));
+        if (lifeBounceTimeoutRef.current !== null) {
+          window.clearTimeout(lifeBounceTimeoutRef.current);
+        }
+        lifeBounceTimeoutRef.current = window.setTimeout(() => {
+          lifeBounceTimeoutRef.current = null;
+          setLifeLostAnim(null);
+        }, 850);
+
+        setBoardFlashTick((prev) => prev + 1);
+        setIsBoardFlashingRed(true);
+        if (boardFlashTimeoutRef.current !== null) {
+          window.clearTimeout(boardFlashTimeoutRef.current);
+        }
+        boardFlashTimeoutRef.current = window.setTimeout(() => {
+          boardFlashTimeoutRef.current = null;
+          setIsBoardFlashingRed(false);
+        }, 300);
+      }
+
+      if (nextLives <= 0) {
+        clearInvulnerability();
         narrator.stop();
         if (gameMode === 'group') {
-          // Mode Kelompok: Simpan skor usaha anak & panggil giliran anak berikutnya tanpa Game Over
           const effortScore = Math.max(
             110,
             collectedIndices.size * 140 + Math.max(0, 140 - steps * 3)
           );
-          const elapsed = Math.max(
-            1,
-            currentLevelConfig.timeLimitSeconds - timeLeft
-          );
+          const elapsed = Math.max(1, effectiveTimeLimit - timeLeft);
           const activeChildName =
             groupPlayers[currentPlayerIndex] ||
             playerName.trim() ||
@@ -2782,27 +3008,10 @@ export default function App() {
           return;
         }
 
-        const nextLives = Math.max(0, lives - 1);
-        setLives(nextLives);
-        if (nextLives < lives) {
-          setLifeLostAnim((prev) => ({
-            lostIndex: nextLives,
-            tick: (prev?.tick ?? 0) + 1,
-          }));
-          if (lifeBounceTimeoutRef.current !== null) {
-            window.clearTimeout(lifeBounceTimeoutRef.current);
-          }
-          lifeBounceTimeoutRef.current = window.setTimeout(() => {
-            lifeBounceTimeoutRef.current = null;
-            setLifeLostAnim(null);
-          }, 850);
-        }
         setIsDizzyPenalty(true);
         setHintCells(new Set());
         triggerBumpFeedback(
-          nextLives > 0
-            ? `Aduh, ${currentLevelConfig.characterName} pusing! Nyawa berkurang 1, level harus diulang.`
-            : `Nyawa habis! ${currentLevelConfig.characterName} lemas, ayo mulai lagi!`
+          `Nyawa habis! ${currentLevelConfig.characterName} lemas, ayo mulai lagi!`
         );
         setLevelResult(
           calculateLevelResult({
@@ -2810,42 +3019,38 @@ export default function App() {
             stepsTaken: steps,
             optimalSteps,
             timeLeft,
-            timeLimit: currentLevelConfig.timeLimitSeconds,
+            timeLimit: effectiveTimeLimit,
           })
         );
         return;
       }
 
+      triggerInvulnerability();
       narrator.playCollisionVoice();
-
-      if (nextBumps === MAX_WALL_BUMPS) {
-        triggerBumpFeedback(
-          `Awas! Benturan ${nextBumps}/${MAX_WALL_BUMPS} — 1 kali lagi nyawa berkurang!`
-        );
-      } else {
-        triggerBumpFeedback(
-          `${baseMessage} (Benturan ${nextBumps}/${MAX_WALL_BUMPS})`
-        );
-      }
+      triggerBumpFeedback(
+        `${baseMessage} Nyawa ${nextLives}/${maxLives} · Kebal 1,5 detik!`
+      );
     },
     [
       advanceGroupTurn,
-      bumpCount,
+      clearInvulnerability,
       collectedIndices.size,
       collectibles.length,
       currentLevelConfig.characterKey,
       currentLevelConfig.characterName,
-      currentLevelConfig.timeLimitSeconds,
       currentPlayerIndex,
+      effectiveTimeLimit,
       gameMode,
       groupPlayers,
       level,
       lives,
+      maxLives,
       optimalSteps,
       playerName,
       steps,
       timeLeft,
       triggerBumpFeedback,
+      triggerInvulnerability,
     ]
   );
 
@@ -2896,7 +3101,7 @@ export default function App() {
     narrator.stop();
     setIsPaused(false);
     loadLevel(1);
-    setLives(MAX_LIVES);
+    setLives(maxLives);
 
     if (gameMode === 'group') {
       setCurrentPlayerIndex(0);
@@ -2908,13 +3113,13 @@ export default function App() {
       setScreenState('PLAYING');
       narrator.playLevelIntroVoice(1);
     }
-  }, [gameMode, groupPlayers, loadLevel]);
+  }, [gameMode, groupPlayers, loadLevel, maxLives]);
 
   const handleStartGroupTurn = useCallback(() => {
     const activeChildName =
       groupPlayers[currentPlayerIndex] || `Anak ${currentPlayerIndex + 1}`;
     setPlayerName(activeChildName);
-    setLives(MAX_LIVES);
+    setLives(maxLives);
     loadLevel(level);
     setScreenState('PLAYING');
     narrator.playLevelIntroVoice(level);
@@ -2926,6 +3131,7 @@ export default function App() {
     groupPlayers,
     level,
     loadLevel,
+    maxLives,
     maybeShowDidYouKnowBetweenLevels,
   ]);
 
@@ -2988,7 +3194,8 @@ export default function App() {
       // Deteksi tabrakan dengan rintangan spesifik level (1)
       if (targetCell === 1) {
         handleCollisionPenalty(
-          `Ups, ada ${currentLevelConfig.obstacleName} di situ!`
+          `Ups, ada ${currentLevelConfig.obstacleName} di situ!`,
+          currentLevelConfig.obstacleIcon
         );
         return;
       }
@@ -3047,12 +3254,9 @@ export default function App() {
           stepsTaken: nextStepCount,
           optimalSteps,
           timeLeft,
-          timeLimit: currentLevelConfig.timeLimitSeconds,
+          timeLimit: effectiveTimeLimit,
         });
-        const elapsedSeconds = Math.max(
-          1,
-          currentLevelConfig.timeLimitSeconds - timeLeft
-        );
+        const elapsedSeconds = Math.max(1, effectiveTimeLimit - timeLeft);
         const displayPlayerName = playerName.trim() || 'Rusa Kecil';
 
         narrator.stop();
@@ -3183,10 +3387,11 @@ export default function App() {
       currentLevelConfig.characterName,
       currentLevelConfig.collectibleName,
       currentLevelConfig.destinationName,
+      currentLevelConfig.obstacleIcon,
       currentLevelConfig.obstacleName,
-      currentLevelConfig.timeLimitSeconds,
       currentPlayerIndex,
       deerPos,
+      effectiveTimeLimit,
       fireVictoryConfetti,
       gameMode,
       groupPlayers,
@@ -3511,6 +3716,9 @@ export default function App() {
       if (lifeBounceTimeoutRef.current !== null) {
         window.clearTimeout(lifeBounceTimeoutRef.current);
       }
+      if (boardFlashTimeoutRef.current !== null) {
+        window.clearTimeout(boardFlashTimeoutRef.current);
+      }
       clearTrailParticles();
       clearCollectedPopups();
       try {
@@ -3593,7 +3801,7 @@ export default function App() {
   );
   const timeProgressPct = Math.max(
     0,
-    Math.min(100, (timeLeft / currentLevelConfig.timeLimitSeconds) * 100)
+    Math.min(100, (timeLeft / effectiveTimeLimit) * 100)
   );
   const isTimeUrgent = timeLeft <= 10 && !hasWon;
   const gridSize = currentLevelConfig.gridSize;
@@ -3791,15 +3999,44 @@ export default function App() {
             ? `${playerName.trim() || 'Petualang Cilik'} (${groupName} · ${currentPlayerIndex + 1}/${groupPlayers.length})`
             : `${playerName.trim() || 'Petualang Cilik'} · Skor: ${totalSessionScore}`}
         </span>
-        <span
-          aria-label={`Sisa nyawa ${lives} dari ${MAX_LIVES}`}
-          className="inline-flex items-center gap-0.5 shrink-0"
+        <motion.span
+          aria-label={`Sisa nyawa ${lives} dari ${maxLives}`}
+          initial={false}
+          animate={
+            lifeLostAnim !== null && !shouldReduceMotion
+              ? {
+                  x: [0, -8, 8, -7, 7, -4, 4, -2, 0],
+                  rotate: [0, -4.5, 4.5, -3.5, 3.5, -2, 2, 0],
+                  scale: [1, 1.14, 1.08, 1.12, 1.04, 1],
+                }
+              : { x: 0, rotate: 0, scale: 1 }
+          }
+          transition={
+            lifeLostAnim !== null && !shouldReduceMotion
+              ? { duration: 0.54, ease: 'easeInOut' }
+              : { duration: 0.2 }
+          }
+          className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full border shrink-0 transition-colors ${
+            lifeLostAnim !== null
+              ? isNightWeather
+                ? 'bg-rose-500/30 border-rose-400 shadow-[0_0_0_3px_rgba(251,113,133,0.35)]'
+                : 'bg-rose-100 border-rose-500 shadow-[0_0_0_3px_rgba(244,63,94,0.28)]'
+              : lives === 1
+              ? isNightWeather
+                ? 'bg-rose-900/75 border-rose-400/80 shadow-[0_0_10px_rgba(251,113,133,0.3)]'
+                : 'bg-rose-100/95 border-rose-400 shadow-[0_0_10px_rgba(244,63,94,0.22)]'
+              : isNightWeather
+              ? 'bg-rose-950/55 border-rose-500/45'
+              : 'bg-rose-50/90 border-rose-200/90'
+          }`}
         >
-          {Array.from({ length: MAX_LIVES }, (_, idx) => {
+          {Array.from({ length: maxLives }, (_, idx) => {
             const active = idx < lives;
             const isBouncing = lifeLostAnim !== null && !shouldReduceMotion;
             const isJustLost =
               isBouncing && lifeLostAnim.lostIndex === idx;
+            const isCriticalLastHeart =
+              active && lives === 1 && !isBouncing && !shouldReduceMotion;
 
             return (
               <span
@@ -3816,10 +4053,26 @@ export default function App() {
                     className="pointer-events-none absolute inset-0 rounded-full border-2 border-rose-400"
                   />
                 )}
+                {isCriticalLastHeart && (
+                  <motion.span
+                    key={`life-critical-ring-${idx}`}
+                    aria-hidden="true"
+                    initial={{ opacity: 0.7, scale: 0.9 }}
+                    animate={{ opacity: [0.65, 0, 0], scale: [0.9, 1.85, 1.85] }}
+                    transition={{
+                      duration: 0.95,
+                      repeat: Infinity,
+                      ease: 'easeOut',
+                    }}
+                    className="pointer-events-none absolute inset-0 rounded-full border border-rose-500"
+                  />
+                )}
                 <motion.svg
                   key={
                     isBouncing
                       ? `heart-${idx}-${lifeLostAnim.tick}`
+                      : isCriticalLastHeart
+                      ? `heart-critical-${idx}`
                       : `heart-${idx}`
                   }
                   viewBox="0 0 24 24"
@@ -3838,6 +4091,12 @@ export default function App() {
                           y: [0, -5, 0, -2, 0],
                           scale: [1, 1.16, 0.96, 1],
                         }
+                      : isCriticalLastHeart
+                      ? {
+                          y: 0,
+                          scale: [1, 1.32, 1.06, 1.24, 1],
+                          rotate: 0,
+                        }
                       : {
                           y: 0,
                           scale: active ? 1 : 0.9,
@@ -3851,11 +4110,19 @@ export default function App() {
                           delay: isJustLost ? 0 : idx * 0.05,
                           ease: 'easeOut',
                         }
+                      : isCriticalLastHeart
+                      ? {
+                          duration: 0.95,
+                          repeat: Infinity,
+                          ease: 'easeInOut',
+                        }
                       : { duration: 0.2 }
                   }
                   className={`w-3.5 h-3.5 sm:w-4 sm:h-4 transition-colors duration-200 ${
                     active
-                      ? 'text-rose-500'
+                      ? lives === 1
+                        ? 'text-rose-600 drop-shadow-[0_0_5px_rgba(244,63,94,0.65)]'
+                        : 'text-rose-500'
                       : isNightWeather
                       ? 'text-slate-600'
                       : 'text-stone-300'
@@ -3866,7 +4133,7 @@ export default function App() {
               </span>
             );
           })}
-        </span>
+        </motion.span>
       </div>
     </div>
   );
@@ -4252,7 +4519,8 @@ export default function App() {
               <span>Level {String(level).padStart(2, '0')}</span>
             </span>
             <span className="text-[9px] sm:text-[10px] font-extrabold text-emerald-800 truncate">
-              Grid {gridSize}×{gridSize} · {currentLevelConfig.difficulty}
+              Grid {gridSize}×{gridSize} ·{' '}
+              {'★'.repeat(difficultyConfig.stars)} {difficultyConfig.label}
             </span>
           </div>
 
@@ -4260,17 +4528,47 @@ export default function App() {
             <span className="text-emerald-950 truncate">
               Langkah: {steps}/{optimalSteps}
             </span>
-            <span
-              className={`shrink-0 ${
-                bumpCount >= MAX_WALL_BUMPS
+            <motion.span
+              key={
+                lifeLostAnim !== null
+                  ? `compact-lives-shake-${lifeLostAnim.tick}`
+                  : lives === 1 && !isInvulnerable && !shouldReduceMotion
+                  ? 'compact-lives-critical'
+                  : 'compact-lives-idle'
+              }
+              initial={false}
+              animate={
+                lifeLostAnim !== null && !shouldReduceMotion
+                  ? {
+                      x: [0, -6, 6, -5, 5, -3, 3, 0],
+                      scale: [1, 1.15, 1.05, 1.1, 1],
+                    }
+                  : lives === 1 && !isInvulnerable && !shouldReduceMotion
+                  ? {
+                      x: 0,
+                      scale: [1, 1.14, 1.03, 1.1, 1],
+                    }
+                  : { x: 0, scale: 1 }
+              }
+              transition={
+                lifeLostAnim !== null && !shouldReduceMotion
+                  ? { duration: 0.5, ease: 'easeInOut' }
+                  : lives === 1 && !isInvulnerable && !shouldReduceMotion
+                  ? { duration: 0.95, repeat: Infinity, ease: 'easeInOut' }
+                  : { duration: 0.2 }
+              }
+              className={`shrink-0 inline-block ${
+                lifeLostAnim !== null
                   ? 'text-rose-600'
-                  : bumpCount > 0
-                  ? 'text-amber-700'
-                  : 'text-emerald-800/80'
+                  : isInvulnerable
+                  ? 'text-amber-600 animate-pulse'
+                  : lives <= 1
+                  ? 'text-rose-600'
+                  : 'text-emerald-800/90'
               }`}
             >
-              Tabrak: {Math.min(bumpCount, MAX_WALL_BUMPS)}/{MAX_WALL_BUMPS}
-            </span>
+              {isInvulnerable ? '🛡️ Kebal!' : `❤️ ${lives}/${maxLives}`}
+            </motion.span>
             <span
               className={`inline-flex items-center gap-0.5 shrink-0 ${
                 isTimeUrgent
@@ -4507,13 +4805,32 @@ export default function App() {
   const mazeBoardElement = (
     <div
       aria-label={`Papan labirin ${gridSize} kali ${gridSize}`}
-      className={`w-full aspect-square bg-[#FDF2DA] border-4 border-[#E8D2A6] rounded-3xl p-2 shadow-[0_12px_26px_rgba(120,88,42,0.12)] ${
+      data-difficulty={difficulty}
+      data-obstacle-interval-ms={effectiveMovingObstacleIntervalMs}
+      className={`relative overflow-hidden w-full aspect-square rounded-3xl p-2 border-4 transition-colors duration-150 ${
+        isBoardFlashingRed
+          ? 'bg-rose-400/95 border-rose-600 ring-4 ring-rose-500/60 shadow-[0_0_32px_rgba(244,63,94,0.55)]'
+          : 'bg-[#FDF2DA] border-[#E8D2A6] shadow-[0_12px_26px_rgba(120,88,42,0.12)]'
+      } ${
         isLandscapeMode
           ? 'max-w-[270px] sm:max-w-[295px] md:max-w-[320px] mx-auto'
           : 'max-w-[355px] sm:max-w-[395px] mx-auto'
       }`}
     >
       <div className="relative w-full h-full">
+              <AnimatePresence>
+                {isBoardFlashingRed && (
+                  <motion.div
+                    key={`board-red-flash-${boardFlashTick}`}
+                    aria-hidden="true"
+                    initial={{ opacity: 0.72 }}
+                    animate={{ opacity: [0.72, 0.45, 0] }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.3, ease: 'easeOut' }}
+                    className="pointer-events-none absolute -inset-1 z-30 rounded-2xl bg-rose-500/55 ring-4 ring-inset ring-rose-500/80"
+                  />
+                )}
+              </AnimatePresence>
               <div
                 style={{
                   gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
@@ -4958,7 +5275,11 @@ export default function App() {
                       transform:
                         facing === 'LEFT' ? 'scaleX(-1)' : 'scaleX(1)',
                     }}
-                    className="w-full h-full flex items-center justify-center transition-transform duration-150 pointer-events-none select-none"
+                    className={`w-full h-full flex items-center justify-center transition-transform duration-150 pointer-events-none select-none ${
+                      isInvulnerable && !isDizzyPenalty && !hasWon
+                        ? 'kawaii-invulnerable-blink drop-shadow-[0_0_8px_rgba(251,191,36,0.7)]'
+                        : ''
+                    }`}
                   >
                     <KawaiiCharacterIcon
                       character={activeCharacterKey}
@@ -5755,8 +6076,8 @@ export default function App() {
               </h2>
               {isDizzyPenalty && (
                 <p className="text-xs sm:text-sm font-bold text-rose-800/85 mt-1">
-                  Menabrak {currentLevelConfig.obstacleName} lebih dari{' '}
-                  {MAX_WALL_BUMPS} kali · Sisa nyawa: {lives}/{MAX_LIVES}
+                  Menabrak {currentLevelConfig.obstacleName} · Kesulitan{' '}
+                  {difficultyConfig.label} · Sisa nyawa: {lives}/{maxLives}
                 </p>
               )}
               {(hasWon || isTimeUp || isDizzyPenalty) && (
@@ -6269,7 +6590,7 @@ export default function App() {
                     <span>
                       {lives > 0
                         ? `Coba Lagi · Ulangi Level ${level}`
-                        : 'Coba Lagi · Mulai (3 Nyawa)'}
+                        : `Coba Lagi · Mulai (${maxLives} Nyawa)`}
                     </span>
                     {showShortcutLabels && (
                       <span className="px-1.5 py-0.5 rounded bg-amber-600/25 text-[10px] font-black font-mono">
@@ -6639,7 +6960,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Modal Pengaturan Permainan di Dalam Game (Mode Tampilan Potret/Lanskap & Suara) */}
+      {/* Modal Pengaturan Permainan di Dalam Game (5 Kategori Berurutan & Scrollable) */}
       <AnimatePresence>
         {isGameSettingsOpen && (
           <motion.div
@@ -6667,478 +6988,79 @@ export default function App() {
               }
               transition={{ type: 'spring', stiffness: 360, damping: 25 }}
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-sm rounded-3xl bg-white/95 backdrop-blur-2xl border-2 border-white shadow-[0_24px_60px_rgba(15,23,42,0.3)] p-5 text-center text-stone-800 max-h-[90dvh] overflow-y-auto"
+              className="w-full max-w-sm rounded-3xl bg-white/95 backdrop-blur-2xl border-2 border-white shadow-[0_24px_60px_rgba(15,23,42,0.3)] p-4 sm:p-5 text-center text-stone-800 max-h-[90dvh] flex flex-col overflow-hidden"
             >
-              <div className="w-14 h-14 mx-auto mb-2 rounded-2xl bg-purple-100 border-2 border-purple-300 flex items-center justify-center text-2xl shadow-xs">
-                ⚙️
-              </div>
-              <h2
-                id="ingame-settings-title"
-                className="font-display text-xl font-bold text-emerald-950"
-              >
-                Pengaturan Permainan
-              </h2>
-              <p className="text-xs font-bold text-stone-600 mt-1 mb-3">
-                Ubah mode tampilan, label tombol, lisensi, atau tombol Keyboard / Numpad tanpa kehilangan progres!
-              </p>
-
-              {/* Tab Pengaturan Dalam Game */}
-              <div
-                role="tablist"
-                aria-label="Kategori pengaturan dalam game"
-                className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-stone-100 border border-stone-200 mb-3.5"
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={inGameSettingsTab === 'general'}
-                  onClick={() => {
-                    setInGameSettingsTab('general');
-                  }}
-                  className={`px-2.5 py-2 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
-                    inGameSettingsTab === 'general'
-                      ? 'bg-purple-600 text-white shadow-xs'
-                      : 'text-stone-600 hover:text-stone-900'
-                  }`}
-                >
-                  ⚙️ Umum &amp; Lisensi
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={inGameSettingsTab === 'keyboard'}
-                  onClick={() => {
-                    setInGameSettingsTab('keyboard');
-                  }}
-                  className={`px-2.5 py-2 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
-                    inGameSettingsTab === 'keyboard'
-                      ? 'bg-purple-600 text-white shadow-xs'
-                      : 'text-stone-600 hover:text-stone-900'
-                  }`}
-                >
-                  ⌨️ Keyboard / Numpad
-                </button>
-              </div>
-
-              {inGameSettingsTab === 'general' ? (
-                <>
-                  {/* Opsi Mode Tampilan (Potret / Lanskap) */}
-                  <div className="rounded-2xl bg-purple-50/90 border border-purple-200 p-3.5 mb-3 text-left">
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <span className="text-xs font-extrabold text-purple-950 uppercase tracking-wide">
-                        Mode Tampilan
-                      </span>
-                      <span className="px-2 py-0.5 rounded-full bg-purple-200/80 text-[10px] font-extrabold text-purple-900">
-                        {displayMode === 'landscape' ? 'Lanskap Aktif' : 'Potret Aktif'}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleChangeDisplayMode('portrait');
-                        }}
-                        className={`px-3 py-2.5 rounded-xl border-2 flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
-                          displayMode === 'portrait'
-                            ? 'bg-purple-600 border-purple-700 text-white shadow-sm'
-                            : 'bg-white border-purple-200 text-stone-700 hover:bg-purple-100/60'
-                        }`}
-                      >
-                        <svg
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className="w-5 h-5"
-                          aria-hidden="true"
-                        >
-                          <rect x="6" y="2" width="12" height="20" rx="2.5" />
-                          <line x1="12" y1="18" x2="12.01" y2="18" />
-                        </svg>
-                        <span className="text-xs font-extrabold leading-tight">
-                          Potret (Tegak)
-                        </span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleChangeDisplayMode('landscape');
-                        }}
-                        className={`px-3 py-2.5 rounded-xl border-2 flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
-                          displayMode === 'landscape'
-                            ? 'bg-purple-600 border-purple-700 text-white shadow-sm'
-                            : 'bg-white border-purple-200 text-stone-700 hover:bg-purple-100/60'
-                        }`}
-                      >
-                        <svg
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className="w-5 h-5"
-                          aria-hidden="true"
-                        >
-                          <rect x="2" y="6" width="20" height="12" rx="2.5" />
-                          <line x1="18" y1="12" x2="18.01" y2="12" />
-                        </svg>
-                        <span className="text-xs font-extrabold leading-tight">
-                          Lanskap (Lebar)
-                        </span>
-                      </button>
-                    </div>
-
-                    <p className="text-[11px] font-bold text-stone-600 mt-2 leading-snug">
-                      {displayMode === 'landscape'
-                        ? 'Papan Skor di sisi kiri, Labirin di tengah, dan Informasi Misi di sisi kanan.'
-                        : 'Susunan vertikal ringkas untuk layar ponsel tegak.'}
+              <div className="shrink-0 flex items-center justify-between gap-2 pb-3 border-b border-stone-200/80 mb-3">
+                <div className="flex items-center gap-2.5 min-w-0 text-left">
+                  <div className="w-10 h-10 rounded-xl bg-purple-100 border-2 border-purple-300 flex items-center justify-center text-lg shadow-2xs shrink-0">
+                    ⚙️
+                  </div>
+                  <div className="min-w-0">
+                    <h2
+                      id="ingame-settings-title"
+                      className="font-display text-lg sm:text-xl font-bold text-emerald-950 leading-tight truncate"
+                    >
+                      Pengaturan Permainan
+                    </h2>
+                    <p className="text-[11px] font-bold text-stone-500 leading-tight">
+                      Atur kesulitan, suara, layar, tombol, &amp; lisensi
                     </p>
                   </div>
-
-                  {/* Toggle Efek Suara (SFX) */}
-                  <div className="rounded-2xl bg-emerald-50/90 border border-emerald-200 p-3.5 mb-3 flex items-center justify-between gap-2.5">
-                    <div className="text-left min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-xs font-extrabold text-emerald-950">
-                          Efek Suara (SFX)
-                        </p>
-                        <span
-                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
-                            soundEnabled
-                              ? 'bg-emerald-200 text-emerald-900'
-                              : 'bg-stone-200 text-stone-700'
-                          }`}
-                        >
-                          {soundEnabled ? 'Aktif' : 'Bisu'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] font-bold text-emerald-900/80 leading-snug mt-0.5">
-                        {soundEnabled
-                          ? 'Suara langkah, lonceng item, & selebrasi aktif.'
-                          : 'Semua efek suara permainan sedang dibisukan.'}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      data-sfx="custom"
-                      role="switch"
-                      aria-checked={soundEnabled}
-                      aria-label={
-                        soundEnabled
-                          ? 'Matikan efek suara permainan'
-                          : 'Aktifkan efek suara permainan'
-                      }
-                      onClick={handleToggleSound}
-                      className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
-                        soundEnabled
-                          ? 'bg-emerald-500 border-emerald-600'
-                          : 'bg-stone-300 border-stone-400'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                          soundEnabled ? 'translate-x-6' : 'translate-x-0.5'
-                        }`}
-                      />
-                    </button>
-                  </div>
-
-                  {/* Toggle Musik Latar (BGM) Terpisah */}
-                  <div className="rounded-2xl bg-teal-50/90 border border-teal-200 p-3.5 mb-3 flex items-center justify-between gap-2.5">
-                    <div className="text-left min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-xs font-extrabold text-teal-950">
-                          Musik Latar (BGM)
-                        </p>
-                        <span
-                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
-                            bgmEnabled && soundEnabled
-                              ? 'bg-teal-200 text-teal-900'
-                              : bgmEnabled && !soundEnabled
-                              ? 'bg-amber-200 text-amber-900'
-                              : 'bg-stone-200 text-stone-700'
-                          }`}
-                        >
-                          {bgmEnabled
-                            ? soundEnabled
-                              ? 'Aktif'
-                              : 'Dibisukan'
-                            : 'Nonaktif'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] font-bold text-teal-900/80 leading-snug mt-0.5">
-                        {!bgmEnabled
-                          ? 'Musik latar petualangan sedang dimatikan.'
-                          : !soundEnabled
-                          ? 'Audio utama sedang Bisu — aktifkan Suara di header untuk mendengar.'
-                          : 'Melodi ceria 90-an (Taman Ceria & Lembah Malam).'}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      data-sfx="custom"
-                      role="switch"
-                      aria-checked={bgmEnabled}
-                      aria-label={
-                        bgmEnabled
-                          ? 'Matikan musik latar permainan'
-                          : 'Aktifkan musik latar permainan'
-                      }
-                      onClick={handleToggleBgm}
-                      className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
-                        bgmEnabled
-                          ? 'bg-teal-500 border-teal-600'
-                          : 'bg-stone-300 border-stone-400'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                          bgmEnabled ? 'translate-x-6' : 'translate-x-0.5'
-                        }`}
-                      />
-                    </button>
-                  </div>
-
-                  {/* Toggle Suara Narator */}
-                  <div className="rounded-2xl bg-amber-50/90 border border-amber-200 p-3.5 mb-3 flex items-center justify-between gap-2.5">
-                    <div className="text-left min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-xs font-extrabold text-amber-950">
-                          Suara Narator
-                        </p>
-                        <span
-                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
-                            narratorEnabled && soundEnabled
-                              ? 'bg-amber-200 text-amber-900'
-                              : narratorEnabled && !soundEnabled
-                              ? 'bg-stone-200 text-stone-800'
-                              : 'bg-stone-200 text-stone-700'
-                          }`}
-                        >
-                          {narratorEnabled
-                            ? soundEnabled
-                              ? 'Aktif'
-                              : 'Dibisukan'
-                            : 'Nonaktif'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] font-bold text-amber-900/80 leading-snug mt-0.5">
-                        {!narratorEnabled
-                          ? 'Suara cerita Pak Naedie & Ibu Guru dimatikan.'
-                          : !soundEnabled
-                          ? 'Audio utama sedang Bisu — aktifkan Suara untuk mendengar.'
-                          : 'Suara Pak Naedie & Ibu Guru membacakan cerita, petunjuk, & ucapan selamat.'}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      data-sfx="custom"
-                      role="switch"
-                      aria-checked={narratorEnabled}
-                      aria-label={
-                        narratorEnabled
-                          ? 'Matikan suara narator'
-                          : 'Aktifkan suara narator'
-                      }
-                      onClick={handleToggleNarrator}
-                      className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
-                        narratorEnabled
-                          ? 'bg-amber-500 border-amber-600'
-                          : 'bg-stone-300 border-stone-400'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                          narratorEnabled ? 'translate-x-6' : 'translate-x-0.5'
-                        }`}
-                      />
-                    </button>
-                  </div>
-
-                  {/* Toggle Suara Alam Hutan (Ambient SFX) */}
-                  <div className="rounded-2xl bg-emerald-50/90 border border-emerald-200 p-3.5 mb-3 flex items-center justify-between gap-2.5">
-                    <div className="text-left min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-xs font-extrabold text-emerald-950">
-                          Suara Alam Hutan
-                        </p>
-                        <span
-                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
-                            ambientEnabled && soundEnabled
-                              ? 'bg-emerald-200 text-emerald-900'
-                              : ambientEnabled && !soundEnabled
-                              ? 'bg-stone-200 text-stone-800'
-                              : 'bg-stone-200 text-stone-700'
-                          }`}
-                        >
-                          {ambientEnabled
-                            ? soundEnabled
-                              ? 'Aktif'
-                              : 'Dibisukan'
-                            : 'Nonaktif'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] font-bold text-emerald-900/80 leading-snug mt-0.5">
-                        {!ambientEnabled
-                          ? 'Suara ambient hutan dimatikan.'
-                          : !soundEnabled
-                          ? 'Audio utama sedang Bisu — aktifkan Suara untuk mendengar.'
-                          : 'Kicau burung tipis & gemerisik daun lembut di latar.'}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      data-sfx="custom"
-                      role="switch"
-                      aria-checked={ambientEnabled}
-                      aria-label={
-                        ambientEnabled
-                          ? 'Matikan suara alam hutan'
-                          : 'Aktifkan suara alam hutan'
-                      }
-                      onClick={handleToggleAmbient}
-                      className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
-                        ambientEnabled
-                          ? 'bg-emerald-500 border-emerald-600'
-                          : 'bg-stone-300 border-stone-400'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                          ambientEnabled ? 'translate-x-6' : 'translate-x-0.5'
-                        }`}
-                      />
-                    </button>
-                  </div>
-
-                  {/* Toggle Tampilkan Label Tombol */}
-                  <div className="rounded-2xl bg-sky-50/90 border border-sky-200 p-3.5 mb-3 flex items-center justify-between gap-2.5">
-                    <div className="text-left min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-xs font-extrabold text-sky-950">
-                          Tampilkan Label Tombol
-                        </p>
-                        <span
-                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
-                            showShortcutLabels
-                              ? 'bg-emerald-200 text-emerald-900'
-                              : 'bg-stone-200 text-stone-700'
-                          }`}
-                        >
-                          {showShortcutLabels ? 'Aktif' : 'Nonaktif'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] font-bold text-sky-900/80 leading-snug mt-0.5">
-                        {showShortcutLabels
-                          ? 'Petunjuk pintasan tombol ditampilkan pada tombol aksi.'
-                          : 'Nonaktif agar tampilan tombol tetap bersih.'}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      data-sfx="custom"
-                      role="switch"
-                      aria-checked={showShortcutLabels}
-                      aria-label={
-                        showShortcutLabels
-                          ? 'Sembunyikan label tombol'
-                          : 'Tampilkan label tombol'
-                      }
-                      onClick={() => {
-                        handleToggleShowShortcutLabels();
-                      }}
-                      className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                        showShortcutLabels
-                          ? 'bg-emerald-500 border-emerald-600'
-                          : 'bg-stone-300 border-stone-400'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                          showShortcutLabels ? 'translate-x-6' : 'translate-x-0.5'
-                        }`}
-                      />
-                    </button>
-                  </div>
-
-                  {/* Toggle Status Lisensi Game Penuh */}
-                  <div className="rounded-2xl bg-amber-50/90 border border-amber-200 p-3.5 mb-4 flex items-center justify-between gap-2.5">
-                    <div className="text-left min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <p className="text-xs font-extrabold text-amber-950">
-                          Status Lisensi
-                        </p>
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                            isLicenseActive
-                              ? 'bg-emerald-200 text-emerald-900'
-                              : 'bg-stone-200 text-stone-700'
-                          }`}
-                        >
-                          {licenseBadgeLabel}
-                        </span>
-                      </div>
-                      <p className="text-[11px] font-bold text-amber-900/80 leading-snug mt-0.5">
-                        {licenseDetailText}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      data-sfx="custom"
-                      role="switch"
-                      aria-checked={isLicenseActive}
-                      aria-label={
-                        isLicenseActive
-                          ? 'Nonaktifkan status lisensi'
-                          : 'Aktifkan status lisensi'
-                      }
-                      onClick={handleToggleLicenseStatus}
-                      className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
-                        isLicenseActive
-                          ? 'bg-emerald-500 border-emerald-600'
-                          : 'bg-stone-300 border-stone-400'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                          isLicenseActive ? 'translate-x-6' : 'translate-x-0.5'
-                        }`}
-                      />
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div className="mb-4">
-                  <KeyboardSettingsPanel
-                    keyBindings={keyBindings}
-                    showShortcutLabels={showShortcutLabels}
-                    onUpdateBinding={handleUpdateKeyBinding}
-                    onResetBindings={handleResetKeyBindings}
-                    onToggleShowShortcutLabels={handleToggleShowShortcutLabels}
-                    onRecordingChange={setIsRecordingInGameKey}
-                  />
                 </div>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setIsGameSettingsOpen(false)}
+                  aria-label="Tutup pengaturan"
+                  className="w-9 h-9 rounded-full bg-stone-100 hover:bg-stone-200 text-stone-600 flex items-center justify-center shrink-0 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4 stroke-[2.5]" aria-hidden="true" />
+                </button>
+              </div>
 
-              <button
-                type="button"
-                data-sfx="custom"
-                data-kb-default="true"
-                onClick={() => setIsGameSettingsOpen(false)}
-                className="w-full min-h-[44px] rounded-2xl bg-emerald-500 hover:bg-emerald-600 border-b-4 border-emerald-700 text-white font-display text-base font-bold shadow-md active:border-b-0 transition-colors cursor-pointer flex items-center justify-center gap-2"
-              >
-                <span>Simpan &amp; Lanjutkan</span>
-                {showShortcutLabels && (
-                  <span className="px-1.5 py-0.5 rounded bg-emerald-700/70 text-[10px] font-black font-mono">
-                    {getActionBadgeLabel('confirm', keyBindings)}
-                  </span>
-                )}
-              </button>
+              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1">
+                <GameSettingsModalContent
+                  difficulty={difficulty}
+                  onChangeDifficulty={handleChangeDifficulty}
+                  soundEnabled={soundEnabled}
+                  bgmEnabled={bgmEnabled}
+                  narratorEnabled={narratorEnabled}
+                  ambientEnabled={ambientEnabled}
+                  onToggleSound={handleToggleSound}
+                  onToggleBgm={handleToggleBgm}
+                  onToggleNarrator={handleToggleNarrator}
+                  onToggleAmbient={handleToggleAmbient}
+                  displayMode={displayMode}
+                  onChangeDisplayMode={handleChangeDisplayMode}
+                  keyBindings={keyBindings}
+                  showShortcutLabels={showShortcutLabels}
+                  onUpdateKeyBinding={handleUpdateKeyBinding}
+                  onResetKeyBindings={handleResetKeyBindings}
+                  onToggleShowShortcutLabels={handleToggleShowShortcutLabels}
+                  onRecordingChange={setIsRecordingInGameKey}
+                  isLicenseActive={isLicenseActive}
+                  licenseBadgeLabel={licenseBadgeLabel}
+                  licenseDetailText={licenseDetailText}
+                  onToggleLicense={handleToggleLicenseStatus}
+                  onOpenLicenseModal={handleOpenLicenseModalFromSettings}
+                />
+              </div>
+
+              <div className="shrink-0 pt-3 mt-3 border-t border-stone-200/80">
+                <button
+                  type="button"
+                  data-sfx="custom"
+                  data-kb-default="true"
+                  onClick={() => setIsGameSettingsOpen(false)}
+                  className="w-full min-h-[44px] rounded-2xl bg-emerald-500 hover:bg-emerald-600 border-b-4 border-emerald-700 text-white font-display text-base font-bold shadow-md active:border-b-0 transition-colors cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <span>Simpan &amp; Lanjutkan</span>
+                  {showShortcutLabels && (
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-700/70 text-[10px] font-black font-mono">
+                      {getActionBadgeLabel('confirm', keyBindings)}
+                    </span>
+                  )}
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}
@@ -7168,6 +7090,8 @@ export default function App() {
         shouldReduceMotion={Boolean(shouldReduceMotion)}
         displayMode={displayMode}
         onChangeDisplayMode={handleChangeDisplayMode}
+        difficulty={difficulty}
+        onChangeDifficulty={handleChangeDifficulty}
         soundEnabled={soundEnabled}
         bgmEnabled={bgmEnabled}
         narratorEnabled={narratorEnabled}
@@ -7180,6 +7104,7 @@ export default function App() {
         licenseBadgeLabel={licenseBadgeLabel}
         licenseDetailText={licenseDetailText}
         onToggleLicense={handleToggleLicenseStatus}
+        onOpenLicenseModal={handleOpenLicenseModalFromSettings}
         keyBindings={keyBindings}
         showShortcutLabels={showShortcutLabels}
         isOtherModalOpen={isLeaderboardOpen || isTutorialOpen || isLicensePopupOpen}
@@ -7281,7 +7206,7 @@ export default function App() {
         onPlayNextRound={handleNextLevel}
         onReplaySameRound={() => {
           loadLevel(level);
-          setLives(MAX_LIVES);
+          setLives(maxLives);
           setCurrentPlayerIndex(0);
           setGroupTurnResults([]);
           setPreviousTurnResult(null);

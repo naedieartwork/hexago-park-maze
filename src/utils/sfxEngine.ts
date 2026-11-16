@@ -2,6 +2,8 @@
 // Sintesis polifonik lembut (sine, triangle, filter low-pass, dan amplop ADSR halus)
 // Tanpa BGM dan tanpa narasi suara.
 
+import type { ObstacleKind } from '../components/MissionIcons';
+
 const SFX_STORAGE_KEY = 'forest_maze_sfx_enabled_v1';
 
 // Tangga nada mayor pentatonik ceria (Hz) untuk item koleksi bertahap naik
@@ -248,6 +250,70 @@ class ForestSfxEngine {
     osc.onended = () => {
       try {
         osc.disconnect();
+        filter.disconnect();
+        gain.disconnect();
+      } catch {
+        // Abaikan
+      }
+    };
+  }
+
+  private playNoiseBurst({
+    ctx,
+    startTime,
+    duration,
+    filterType = 'bandpass',
+    startFreq,
+    endFreq,
+    filterQ = 1.2,
+    peakGain = 0.16,
+    attack = 0.006,
+    offset = 0,
+  }: {
+    ctx: AudioContext;
+    startTime: number;
+    duration: number;
+    filterType?: BiquadFilterType;
+    startFreq: number;
+    endFreq?: number;
+    filterQ?: number;
+    peakGain?: number;
+    attack?: number;
+    offset?: number;
+  }): void {
+    const dest = this.getOutputNode();
+    const noiseBuf = this.getNoiseBuffer(ctx);
+    if (!dest || !noiseBuf) return;
+
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuf;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = filterType;
+    filter.Q.setValueAtTime(filterQ, startTime);
+    filter.frequency.setValueAtTime(Math.max(40, startFreq), startTime);
+    if (endFreq !== undefined && endFreq !== startFreq) {
+      filter.frequency.exponentialRampToValueAtTime(
+        Math.max(40, endFreq),
+        startTime + duration
+      );
+    }
+
+    const gain = ctx.createGain();
+    const safePeak = Math.max(0.001, peakGain);
+    gain.gain.setValueAtTime(0.0001, startTime);
+    gain.gain.linearRampToValueAtTime(safePeak, startTime + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(dest);
+
+    const safeOffset = Math.max(0, Math.min(0.8, offset));
+    src.start(startTime, safeOffset, duration + 0.03);
+    src.onended = () => {
+      try {
+        src.disconnect();
         filter.disconnect();
         gain.disconnect();
       } catch {
@@ -526,6 +592,388 @@ class ForestSfxEngine {
         peakGain: 0.14,
         filterFreq: 700,
       });
+    } catch {
+      // Abaikan
+    }
+  }
+
+  // 5b. Menabrak Rintangan Spesifik: Efek suara unik sesuai jenis rintangan
+  public playObstacleBump(obstacleKind?: ObstacleKind): void {
+    if (!obstacleKind) {
+      this.playBump();
+      return;
+    }
+
+    this.markCustomSfx();
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+
+    try {
+      const now = ctx.currentTime;
+
+      switch (obstacleKind) {
+        case 'bush': {
+          // Semak hijau: suara 'kresek-kresek' dedaunan
+          [0, 0.048, 0.1].forEach((delay, idx) => {
+            this.playNoiseBurst({
+              ctx,
+              startTime: now + delay,
+              duration: idx === 1 ? 0.075 : 0.065,
+              filterType: 'bandpass',
+              startFreq: idx === 1 ? 2300 : 1650,
+              endFreq: idx === 2 ? 1200 : 2500,
+              filterQ: 1.35,
+              peakGain: idx === 0 ? 0.22 : 0.17,
+              attack: 0.005,
+              offset: idx * 0.14,
+            });
+          });
+          this.playTone({
+            ctx,
+            type: 'sine',
+            startFreq: 195,
+            endFreq: 120,
+            startTime: now,
+            attack: 0.006,
+            decay: 0.11,
+            peakGain: 0.12,
+            filterFreq: 750,
+          });
+          break;
+        }
+
+        case 'fence': {
+          // Pagar kebun: suara ketukan papan kayu 'klotak-tok'
+          this.playTone({
+            ctx,
+            type: 'triangle',
+            startFreq: 410,
+            endFreq: 255,
+            startTime: now,
+            attack: 0.003,
+            decay: 0.08,
+            peakGain: 0.22,
+            filterFreq: 1900,
+          });
+          this.playTone({
+            ctx,
+            type: 'triangle',
+            startFreq: 540,
+            endFreq: 350,
+            startTime: now + 0.065,
+            attack: 0.003,
+            decay: 0.07,
+            peakGain: 0.15,
+            filterFreq: 2100,
+          });
+          this.playNoiseBurst({
+            ctx,
+            startTime: now,
+            duration: 0.045,
+            filterType: 'bandpass',
+            startFreq: 980,
+            endFreq: 680,
+            filterQ: 1.8,
+            peakGain: 0.14,
+            attack: 0.002,
+          });
+          break;
+        }
+
+        case 'puddle': {
+          // Genangan air: suara cipratan air 'cebur' + gelembung
+          this.playNoiseBurst({
+            ctx,
+            startTime: now,
+            duration: 0.19,
+            filterType: 'bandpass',
+            startFreq: 420,
+            endFreq: 1850,
+            filterQ: 1.15,
+            peakGain: 0.23,
+            attack: 0.008,
+          });
+          this.playTone({
+            ctx,
+            type: 'sine',
+            startFreq: 330,
+            endFreq: 740,
+            startTime: now + 0.018,
+            attack: 0.006,
+            decay: 0.11,
+            peakGain: 0.16,
+            filterFreq: 2400,
+          });
+          this.playTone({
+            ctx,
+            type: 'sine',
+            startFreq: 510,
+            endFreq: 960,
+            startTime: now + 0.075,
+            attack: 0.005,
+            decay: 0.09,
+            peakGain: 0.11,
+            filterFreq: 2600,
+          });
+          break;
+        }
+
+        case 'fallenlog': {
+          // Batang kayu tumbang: suara berat 'bruuk'
+          this.playTone({
+            ctx,
+            type: 'sine',
+            startFreq: 142,
+            endFreq: 52,
+            startTime: now,
+            attack: 0.005,
+            decay: 0.23,
+            peakGain: 0.28,
+            filterFreq: 520,
+          });
+          this.playTone({
+            ctx,
+            type: 'triangle',
+            startFreq: 225,
+            endFreq: 112,
+            startTime: now,
+            attack: 0.004,
+            decay: 0.16,
+            peakGain: 0.18,
+            filterFreq: 860,
+          });
+          this.playNoiseBurst({
+            ctx,
+            startTime: now,
+            duration: 0.13,
+            filterType: 'lowpass',
+            startFreq: 420,
+            endFreq: 140,
+            filterQ: 1.0,
+            peakGain: 0.22,
+            attack: 0.004,
+          });
+          break;
+        }
+
+        case 'rock': {
+          // Batu besar: suara benturan keras padat 'duk-tok'
+          this.playTone({
+            ctx,
+            type: 'sine',
+            startFreq: 178,
+            endFreq: 82,
+            startTime: now,
+            attack: 0.003,
+            decay: 0.12,
+            peakGain: 0.25,
+            filterFreq: 680,
+          });
+          this.playTone({
+            ctx,
+            type: 'triangle',
+            startFreq: 640,
+            endFreq: 380,
+            startTime: now,
+            attack: 0.002,
+            decay: 0.055,
+            peakGain: 0.15,
+            filterFreq: 2000,
+          });
+          this.playNoiseBurst({
+            ctx,
+            startTime: now,
+            duration: 0.045,
+            filterType: 'bandpass',
+            startFreq: 1200,
+            endFreq: 750,
+            filterQ: 2.0,
+            peakGain: 0.16,
+            attack: 0.002,
+          });
+          break;
+        }
+
+        case 'twigs': {
+          // Tumpukan ranting: suara derak ranting patah 'krek-krek-krek'
+          [0, 0.036, 0.072, 0.112].forEach((delay, idx) => {
+            this.playNoiseBurst({
+              ctx,
+              startTime: now + delay,
+              duration: 0.038,
+              filterType: 'bandpass',
+              startFreq: 2200 + idx * 240,
+              endFreq: 1500,
+              filterQ: 2.1,
+              peakGain: 0.21 - idx * 0.02,
+              attack: 0.002,
+              offset: 0.08 * idx,
+            });
+            this.playTone({
+              ctx,
+              type: 'triangle',
+              startFreq: 860 + idx * 110,
+              endFreq: 420,
+              startTime: now + delay,
+              attack: 0.002,
+              decay: 0.03,
+              peakGain: 0.11,
+              filterFreq: 2800,
+            });
+          });
+          break;
+        }
+
+        case 'cactus': {
+          // Kaktus sabana: suara sentuhan tajam lucu 'ctek-boing!'
+          this.playTone({
+            ctx,
+            type: 'triangle',
+            startFreq: 820,
+            endFreq: 340,
+            startTime: now,
+            attack: 0.002,
+            decay: 0.048,
+            peakGain: 0.19,
+            filterFreq: 3200,
+          });
+          this.playTone({
+            ctx,
+            type: 'sine',
+            startFreq: 320,
+            endFreq: 640,
+            startTime: now + 0.035,
+            attack: 0.005,
+            decay: 0.11,
+            peakGain: 0.17,
+            filterFreq: 2400,
+          });
+          this.playNoiseBurst({
+            ctx,
+            startTime: now,
+            duration: 0.032,
+            filterType: 'highpass',
+            startFreq: 2400,
+            peakGain: 0.12,
+            attack: 0.002,
+          });
+          break;
+        }
+
+        case 'bamboo': {
+          // Rumpun bambu: suara ketukan bambu berongga 'klonk-klong'
+          this.playTone({
+            ctx,
+            type: 'sine',
+            startFreq: 495,
+            endFreq: 465,
+            startTime: now,
+            attack: 0.003,
+            decay: 0.14,
+            peakGain: 0.21,
+            filterFreq: 2200,
+          });
+          this.playTone({
+            ctx,
+            type: 'triangle',
+            startFreq: 990,
+            endFreq: 920,
+            startTime: now,
+            attack: 0.003,
+            decay: 0.09,
+            peakGain: 0.1,
+            filterFreq: 2800,
+          });
+          this.playTone({
+            ctx,
+            type: 'sine',
+            startFreq: 590,
+            endFreq: 555,
+            startTime: now + 0.068,
+            attack: 0.003,
+            decay: 0.12,
+            peakGain: 0.14,
+            filterFreq: 2200,
+          });
+          break;
+        }
+
+        case 'stump': {
+          // Tunggul pohon: suara kayu berakar padat 'tung-duk'
+          this.playTone({
+            ctx,
+            type: 'sine',
+            startFreq: 164,
+            endFreq: 86,
+            startTime: now,
+            attack: 0.004,
+            decay: 0.16,
+            peakGain: 0.25,
+            filterFreq: 640,
+          });
+          this.playTone({
+            ctx,
+            type: 'triangle',
+            startFreq: 320,
+            endFreq: 205,
+            startTime: now,
+            attack: 0.003,
+            decay: 0.1,
+            peakGain: 0.15,
+            filterFreq: 1200,
+          });
+          this.playNoiseBurst({
+            ctx,
+            startTime: now,
+            duration: 0.07,
+            filterType: 'lowpass',
+            startFreq: 520,
+            endFreq: 190,
+            peakGain: 0.15,
+            attack: 0.003,
+          });
+          break;
+        }
+
+        case 'stream': {
+          // Sungai kecil: suara kecipak aliran air 'byuur'
+          this.playNoiseBurst({
+            ctx,
+            startTime: now,
+            duration: 0.25,
+            filterType: 'bandpass',
+            startFreq: 340,
+            endFreq: 1550,
+            filterQ: 0.95,
+            peakGain: 0.24,
+            attack: 0.01,
+            offset: 0.1,
+          });
+          [
+            { delay: 0.01, start: 400, end: 780 },
+            { delay: 0.055, start: 540, end: 960 },
+            { delay: 0.105, start: 670, end: 1120 },
+          ].forEach((b) => {
+            this.playTone({
+              ctx,
+              type: 'sine',
+              startFreq: b.start,
+              endFreq: b.end,
+              startTime: now + b.delay,
+              attack: 0.005,
+              decay: 0.095,
+              peakGain: 0.12,
+              filterFreq: 2800,
+            });
+          });
+          break;
+        }
+
+        default: {
+          this.playBump();
+          break;
+        }
+      }
     } catch {
       // Abaikan
     }

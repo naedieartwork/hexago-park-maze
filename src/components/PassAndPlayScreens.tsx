@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Volume2, X } from 'lucide-react';
-import { PWAInstallButton } from './PWAInstallButton';
 import {
   CompanionKawaiiAvatar,
   CompanionTeacherFullBody,
@@ -13,7 +12,7 @@ import {
   ZookeeperNaedieFullBody,
   type KawaiiCharacterKey,
 } from './KawaiiCharacters';
-import { KeyboardSettingsPanel } from './KeyboardSettingsPanel';
+import { GameSettingsModalContent } from './GameSettingsModalContent';
 import {
   DEFAULT_KEY_BINDINGS,
   activateFocusedOrDefault,
@@ -26,6 +25,10 @@ import {
 } from '../utils/keyboardConfig';
 import { sfxEngine } from '../utils/sfxEngine';
 import { narrator } from '../utils/narrator';
+import {
+  DEFAULT_GAME_DIFFICULTY,
+  type GameDifficulty,
+} from '../utils/difficultyConfig';
 
 export type GameMode = 'solo' | 'group';
 
@@ -177,10 +180,13 @@ type CoverScreenProps = {
   shouldReduceMotion: boolean;
   displayMode: DisplayMode;
   onChangeDisplayMode: (mode: DisplayMode) => void;
+  difficulty?: GameDifficulty;
+  onChangeDifficulty?: (difficulty: GameDifficulty) => void;
   isLicenseActive: boolean;
   licenseBadgeLabel?: string;
   licenseDetailText?: string;
   onToggleLicense: () => void;
+  onOpenLicenseModal?: () => void;
   keyBindings?: KeyBindingsMap;
   showShortcutLabels?: boolean;
   soundEnabled?: boolean;
@@ -205,10 +211,13 @@ export const CoverScreen: React.FC<CoverScreenProps> = ({
   shouldReduceMotion,
   displayMode,
   onChangeDisplayMode,
+  difficulty = DEFAULT_GAME_DIFFICULTY,
+  onChangeDifficulty,
   isLicenseActive,
   licenseBadgeLabel,
   licenseDetailText,
   onToggleLicense,
+  onOpenLicenseModal,
   keyBindings = DEFAULT_KEY_BINDINGS,
   showShortcutLabels = false,
   soundEnabled = true,
@@ -228,7 +237,6 @@ export const CoverScreen: React.FC<CoverScreenProps> = ({
   onOpenHelp,
 }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
-  const [settingsTab, setSettingsTab] = useState<'general' | 'keyboard'>('general');
   const [isRecordingKey, setIsRecordingKey] = useState<boolean>(false);
   const [isAboutHelpOpen, setIsAboutHelpOpen] = useState<boolean>(false);
   const [isExitConfirmOpen, setIsExitConfirmOpen] = useState<boolean>(false);
@@ -302,7 +310,6 @@ export const CoverScreen: React.FC<CoverScreenProps> = ({
 
   useEffect(() => {
     if (!isSettingsOpen) {
-      setSettingsTab('general');
       setIsRecordingKey(false);
     }
   }, [isSettingsOpen]);
@@ -1917,7 +1924,7 @@ export const CoverScreen: React.FC<CoverScreenProps> = ({
               </>
             )}
 
-            {/* Modal Pengaturan Permainan (Mode Tampilan Potret/Lanskap, Label, Lisensi & Keyboard) */}
+            {/* Modal Pengaturan Permainan (Sistem 5 Kategori Terpisah & Scroll Halus) */}
             <AnimatePresence>
               {isSettingsOpen && (
                 <motion.div
@@ -1945,497 +1952,84 @@ export const CoverScreen: React.FC<CoverScreenProps> = ({
                     }
                     transition={{ type: 'spring', stiffness: 360, damping: 25 }}
                     onClick={(e) => e.stopPropagation()}
-                    className="w-full max-w-sm rounded-3xl bg-white/95 backdrop-blur-2xl border-2 border-white shadow-[0_24px_60px_rgba(15,23,42,0.3)] p-5 text-center text-stone-800 max-h-[90dvh] overflow-y-auto"
+                    className="w-full max-w-sm rounded-3xl bg-white/95 backdrop-blur-2xl border-2 border-white shadow-[0_24px_60px_rgba(15,23,42,0.3)] p-4 sm:p-5 text-center text-stone-800 max-h-[90dvh] flex flex-col overflow-hidden"
                   >
-                    <div className="w-14 h-14 mx-auto mb-2 rounded-2xl bg-purple-100 border-2 border-purple-300 flex items-center justify-center text-2xl shadow-xs">
-                      ⚙️
-                    </div>
-                    <h2
-                      id="cover-settings-title"
-                      className="font-display text-xl font-bold text-emerald-950"
-                    >
-                      Pengaturan Permainan
-                    </h2>
-                    <p className="text-xs font-bold text-stone-600 mt-1 mb-3">
-                      Atur tampilan layar, label tombol, lisensi, dan tombol Keyboard / Numpad OTG!
-                    </p>
-
-                    {/* Tab Pengaturan: Umum vs Konfigurasi Keyboard / Numpad */}
-                    <div
-                      role="tablist"
-                      aria-label="Kategori pengaturan"
-                      className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-stone-100 border border-stone-200 mb-3.5"
-                    >
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={settingsTab === 'general'}
-                        onClick={() => {
-                          setSettingsTab('general');
-                        }}
-                        className={`px-2.5 py-2 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
-                          settingsTab === 'general'
-                            ? 'bg-purple-600 text-white shadow-xs'
-                            : 'text-stone-600 hover:text-stone-900'
-                        }`}
-                      >
-                        ⚙️ Umum &amp; Lisensi
-                      </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={settingsTab === 'keyboard'}
-                        onClick={() => {
-                          setSettingsTab('keyboard');
-                        }}
-                        className={`px-2.5 py-2 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
-                          settingsTab === 'keyboard'
-                            ? 'bg-purple-600 text-white shadow-xs'
-                            : 'text-stone-600 hover:text-stone-900'
-                        }`}
-                      >
-                        ⌨️ Keyboard / Numpad
-                      </button>
-                    </div>
-
-                    {settingsTab === 'general' ? (
-                      <>
-                        {/* 1. Opsi Mode Tampilan (Potret / Lanskap) */}
-                        <div className="rounded-2xl bg-purple-50/90 border border-purple-200 p-3.5 mb-3 text-left">
-                          <div className="flex items-center justify-between gap-2 mb-2">
-                            <span className="text-xs font-extrabold text-purple-950 uppercase tracking-wide">
-                              Mode Tampilan
-                            </span>
-                            <span className="px-2 py-0.5 rounded-full bg-purple-200/80 text-[10px] font-extrabold text-purple-900">
-                              {displayMode === 'landscape' ? 'Lanskap Aktif' : 'Potret Aktif'}
-                            </span>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onChangeDisplayMode('portrait');
-                              }}
-                              className={`px-3 py-2.5 rounded-xl border-2 flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
-                                displayMode === 'portrait'
-                                  ? 'bg-purple-600 border-purple-700 text-white shadow-sm'
-                                  : 'bg-white border-purple-200 text-stone-700 hover:bg-purple-100/60'
-                              }`}
-                            >
-                              <svg
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2.2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                className="w-5 h-5"
-                                aria-hidden="true"
-                              >
-                                <rect x="6" y="2" width="12" height="20" rx="2.5" />
-                                <line x1="12" y1="18" x2="12.01" y2="18" />
-                              </svg>
-                              <span className="text-xs font-extrabold leading-tight">
-                                Potret (Tegak)
-                              </span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onChangeDisplayMode('landscape');
-                              }}
-                              className={`px-3 py-2.5 rounded-xl border-2 flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
-                                displayMode === 'landscape'
-                                  ? 'bg-purple-600 border-purple-700 text-white shadow-sm'
-                                  : 'bg-white border-purple-200 text-stone-700 hover:bg-purple-100/60'
-                              }`}
-                            >
-                              <svg
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2.2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                className="w-5 h-5"
-                                aria-hidden="true"
-                              >
-                                <rect x="2" y="6" width="20" height="12" rx="2.5" />
-                                <line x1="18" y1="12" x2="18.01" y2="12" />
-                              </svg>
-                              <span className="text-xs font-extrabold leading-tight">
-                                Lanskap (Lebar)
-                              </span>
-                            </button>
-                          </div>
-
-                          <p className="text-[11px] font-bold text-stone-600 mt-2 leading-snug">
-                            {displayMode === 'landscape'
-                              ? 'Tata letak melebar: Papan Skor di kiri, Labirin di tengah, dan Informasi Misi di kanan.'
-                              : 'Tata letak vertikal ringkas untuk layar ponsel tegak.'}
+                    <div className="shrink-0 flex items-center justify-between gap-2 pb-3 border-b border-stone-200/80 mb-3">
+                      <div className="flex items-center gap-2.5 min-w-0 text-left">
+                        <div className="w-10 h-10 rounded-xl bg-purple-100 border-2 border-purple-300 flex items-center justify-center text-lg shadow-2xs shrink-0">
+                          ⚙️
+                        </div>
+                        <div className="min-w-0">
+                          <h2
+                            id="cover-settings-title"
+                            className="font-display text-lg sm:text-xl font-bold text-emerald-950 leading-tight truncate"
+                          >
+                            Pengaturan Permainan
+                          </h2>
+                          <p className="text-[11px] font-bold text-stone-500 leading-tight">
+                            Atur kesulitan, suara, layar, tombol, &amp; lisensi
                           </p>
                         </div>
-
-                        {/* 2. Toggle Efek Suara (SFX) */}
-                        <div className="rounded-2xl bg-emerald-50/90 border border-emerald-200 p-3.5 mb-3 flex items-center justify-between gap-2.5">
-                          <div className="text-left min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <p className="text-xs font-extrabold text-emerald-950">
-                                Efek Suara (SFX)
-                              </p>
-                              <span
-                                className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
-                                  soundEnabled
-                                    ? 'bg-emerald-200 text-emerald-900'
-                                    : 'bg-stone-200 text-stone-700'
-                                }`}
-                              >
-                                {soundEnabled ? 'Aktif' : 'Bisu'}
-                              </span>
-                            </div>
-                            <p className="text-[11px] font-bold text-emerald-900/80 leading-snug mt-0.5">
-                              {soundEnabled
-                                ? 'Suara langkah, lonceng item, & selebrasi aktif.'
-                                : 'Seluruh efek suara permainan sedang dimatikan.'}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            data-sfx="custom"
-                            role="switch"
-                            aria-checked={soundEnabled}
-                            aria-label={
-                              soundEnabled
-                                ? 'Matikan efek suara'
-                                : 'Aktifkan efek suara'
-                            }
-                            onClick={() => {
-                              onToggleSound?.();
-                            }}
-                            className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
-                              soundEnabled
-                                ? 'bg-emerald-500 border-emerald-600'
-                                : 'bg-stone-300 border-stone-400'
-                            }`}
-                          >
-                            <span
-                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                                soundEnabled ? 'translate-x-6' : 'translate-x-0.5'
-                              }`}
-                            />
-                          </button>
-                        </div>
-
-                        {/* 2b. Toggle Musik Latar (BGM) Terpisah */}
-                        <div className="rounded-2xl bg-teal-50/90 border border-teal-200 p-3.5 mb-3 flex items-center justify-between gap-2.5">
-                          <div className="text-left min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <p className="text-xs font-extrabold text-teal-950">
-                                Musik Latar (BGM)
-                              </p>
-                              <span
-                                className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
-                                  bgmEnabled && soundEnabled
-                                    ? 'bg-teal-200 text-teal-900'
-                                    : bgmEnabled && !soundEnabled
-                                    ? 'bg-amber-200 text-amber-900'
-                                    : 'bg-stone-200 text-stone-700'
-                                }`}
-                              >
-                                {bgmEnabled
-                                  ? soundEnabled
-                                    ? 'Aktif'
-                                    : 'Dibisukan'
-                                  : 'Nonaktif'}
-                              </span>
-                            </div>
-                            <p className="text-[11px] font-bold text-teal-900/80 leading-snug mt-0.5">
-                              {!bgmEnabled
-                                ? 'Musik latar petualangan sedang dimatikan.'
-                                : !soundEnabled
-                                ? 'Audio utama sedang Bisu — aktifkan Suara untuk mendengar.'
-                                : 'Melodi ceria 90-an (Taman Ceria & Lembah Malam).'}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            data-sfx="custom"
-                            role="switch"
-                            aria-checked={bgmEnabled}
-                            aria-label={
-                              bgmEnabled
-                                ? 'Matikan musik latar'
-                                : 'Aktifkan musik latar'
-                            }
-                            onClick={() => {
-                              onToggleBgm?.();
-                            }}
-                            className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 ${
-                              bgmEnabled
-                                ? 'bg-teal-500 border-teal-600'
-                                : 'bg-stone-300 border-stone-400'
-                            }`}
-                          >
-                            <span
-                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                                bgmEnabled ? 'translate-x-6' : 'translate-x-0.5'
-                              }`}
-                            />
-                          </button>
-                        </div>
-
-                        {/* 2c. Toggle Suara Narator */}
-                        <div className="rounded-2xl bg-amber-50/90 border border-amber-200 p-3.5 mb-3 flex items-center justify-between gap-2.5">
-                          <div className="text-left min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <p className="text-xs font-extrabold text-amber-950">
-                                Suara Narator
-                              </p>
-                              <span
-                                className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
-                                  narratorEnabled && soundEnabled
-                                    ? 'bg-amber-200 text-amber-900'
-                                    : narratorEnabled && !soundEnabled
-                                    ? 'bg-stone-200 text-stone-800'
-                                    : 'bg-stone-200 text-stone-700'
-                                }`}
-                              >
-                                {narratorEnabled
-                                  ? soundEnabled
-                                    ? 'Aktif'
-                                    : 'Dibisukan'
-                                  : 'Nonaktif'}
-                              </span>
-                            </div>
-                            <p className="text-[11px] font-bold text-amber-900/80 leading-snug mt-0.5">
-                              {!narratorEnabled
-                                ? 'Suara cerita Pak Naedie & Ibu Guru dimatikan.'
-                                : !soundEnabled
-                                ? 'Audio utama sedang Bisu — aktifkan Suara untuk mendengar.'
-                                : 'Suara Pak Naedie & Ibu Guru membacakan cerita, petunjuk, & ucapan selamat.'}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            data-sfx="custom"
-                            role="switch"
-                            aria-checked={narratorEnabled}
-                            aria-label={
-                              narratorEnabled
-                                ? 'Matikan suara narator'
-                                : 'Aktifkan suara narator'
-                            }
-                            onClick={() => {
-                              onToggleNarrator?.();
-                            }}
-                            className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
-                              narratorEnabled
-                                ? 'bg-amber-500 border-amber-600'
-                                : 'bg-stone-300 border-stone-400'
-                            }`}
-                          >
-                            <span
-                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                                narratorEnabled ? 'translate-x-6' : 'translate-x-0.5'
-                              }`}
-                            />
-                          </button>
-                        </div>
-
-                        {/* 2d. Toggle Suara Alam Hutan (Ambient SFX) */}
-                        <div className="rounded-2xl bg-emerald-50/90 border border-emerald-200 p-3.5 mb-3 flex items-center justify-between gap-2.5">
-                          <div className="text-left min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <p className="text-xs font-extrabold text-emerald-950">
-                                Suara Alam Hutan
-                              </p>
-                              <span
-                                className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
-                                  ambientEnabled && soundEnabled
-                                    ? 'bg-emerald-200 text-emerald-900'
-                                    : ambientEnabled && !soundEnabled
-                                    ? 'bg-stone-200 text-stone-800'
-                                    : 'bg-stone-200 text-stone-700'
-                                }`}
-                              >
-                                {ambientEnabled
-                                  ? soundEnabled
-                                    ? 'Aktif'
-                                    : 'Dibisukan'
-                                  : 'Nonaktif'}
-                              </span>
-                            </div>
-                            <p className="text-[11px] font-bold text-emerald-900/80 leading-snug mt-0.5">
-                              {!ambientEnabled
-                                ? 'Suara ambient hutan dimatikan.'
-                                : !soundEnabled
-                                ? 'Audio utama sedang Bisu — aktifkan Suara untuk mendengar.'
-                                : 'Kicau burung tipis & gemerisik daun lembut di latar.'}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            data-sfx="custom"
-                            role="switch"
-                            aria-checked={ambientEnabled}
-                            aria-label={
-                              ambientEnabled
-                                ? 'Matikan suara alam hutan'
-                                : 'Aktifkan suara alam hutan'
-                            }
-                            onClick={() => {
-                              onToggleAmbient?.();
-                            }}
-                            className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
-                              ambientEnabled
-                                ? 'bg-emerald-500 border-emerald-600'
-                                : 'bg-stone-300 border-stone-400'
-                            }`}
-                          >
-                            <span
-                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                                ambientEnabled ? 'translate-x-6' : 'translate-x-0.5'
-                              }`}
-                            />
-                          </button>
-                        </div>
-
-                        {/* 3. Toggle Tampilkan Label Tombol */}
-                        <div className="rounded-2xl bg-sky-50/90 border border-sky-200 p-3.5 mb-3 flex items-center justify-between gap-2.5">
-                          <div className="text-left min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <p className="text-xs font-extrabold text-sky-950">
-                                Tampilkan Label Tombol
-                              </p>
-                              <span
-                                className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
-                                  showShortcutLabels
-                                    ? 'bg-emerald-200 text-emerald-900'
-                                    : 'bg-stone-200 text-stone-700'
-                                }`}
-                              >
-                                {showShortcutLabels ? 'Aktif' : 'Nonaktif'}
-                              </span>
-                            </div>
-                            <p className="text-[11px] font-bold text-sky-900/80 leading-snug mt-0.5">
-                              {showShortcutLabels
-                                ? 'Petunjuk pintasan tombol ditampilkan pada tombol aksi.'
-                                : 'Nonaktif agar tampilan tombol tetap bersih.'}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            data-sfx="custom"
-                            role="switch"
-                            aria-checked={showShortcutLabels}
-                            aria-label={
-                              showShortcutLabels
-                                ? 'Sembunyikan label tombol'
-                                : 'Tampilkan label tombol'
-                            }
-                            onClick={() => {
-                              onToggleShowShortcutLabels?.();
-                            }}
-                            className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                              showShortcutLabels
-                                ? 'bg-emerald-500 border-emerald-600'
-                                : 'bg-stone-300 border-stone-400'
-                            }`}
-                          >
-                            <span
-                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                                showShortcutLabels ? 'translate-x-6' : 'translate-x-0.5'
-                              }`}
-                            />
-                          </button>
-                        </div>
-
-                        {/* 3. Toggle Status Lisensi Game Penuh */}
-                        <div className="rounded-2xl bg-amber-50/90 border border-amber-200 p-3.5 mb-4 flex items-center justify-between gap-2.5">
-                          <div className="text-left min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <p className="text-xs font-extrabold text-amber-950">
-                                Status Lisensi
-                              </p>
-                              <span
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                                  isLicenseActive
-                                    ? 'bg-emerald-200 text-emerald-900'
-                                    : 'bg-stone-200 text-stone-700'
-                                }`}
-                              >
-                                {licenseBadgeLabel ??
-                                  (isLicenseActive ? 'Aktif' : 'Nonaktif')}
-                              </span>
-                            </div>
-                            <p className="text-[11px] font-bold text-amber-900/80 leading-snug mt-0.5">
-                              {licenseDetailText ??
-                                (isLicenseActive
-                                  ? 'Akses penuh 10 level terbuka.'
-                                  : 'Aktifkan untuk membuka Level 4+ Solo & Level 2+ Kelompok.')}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            data-sfx="custom"
-                            role="switch"
-                            aria-checked={isLicenseActive}
-                            aria-label={
-                              isLicenseActive
-                                ? 'Nonaktifkan status lisensi'
-                                : 'Aktifkan status lisensi'
-                            }
-                            onClick={onToggleLicense}
-                            className={`relative inline-flex h-7 w-13 shrink-0 items-center rounded-full border-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
-                              isLicenseActive
-                                ? 'bg-emerald-500 border-emerald-600'
-                                : 'bg-stone-300 border-stone-400'
-                            }`}
-                          >
-                            <span
-                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
-                                isLicenseActive ? 'translate-x-6' : 'translate-x-0.5'
-                              }`}
-                            />
-                          </button>
-                        </div>
-
-                        {/* 4. Tombol Pasang Aplikasi PWA Layar Penuh */}
-                        <PWAInstallButton />
-                      </>
-                    ) : (
-                      <div className="mb-4">
-                        <KeyboardSettingsPanel
-                          keyBindings={keyBindings}
-                          showShortcutLabels={showShortcutLabels}
-                          onUpdateBinding={(action, code) =>
-                            onUpdateKeyBinding?.(action, code)
-                          }
-                          onResetBindings={() => onResetKeyBindings?.()}
-                          onToggleShowShortcutLabels={() =>
-                            onToggleShowShortcutLabels?.()
-                          }
-                          onRecordingChange={setIsRecordingKey}
-                        />
                       </div>
-                    )}
+                      <button
+                        type="button"
+                        onClick={() => setIsSettingsOpen(false)}
+                        aria-label="Tutup pengaturan"
+                        className="w-9 h-9 rounded-full bg-stone-100 hover:bg-stone-200 text-stone-600 flex items-center justify-center shrink-0 transition-colors cursor-pointer"
+                      >
+                        <X className="w-4 h-4 stroke-[2.5]" aria-hidden="true" />
+                      </button>
+                    </div>
 
-                    <button
-                      type="button"
-                      data-sfx="custom"
-                      data-kb-default="true"
-                      onClick={() => setIsSettingsOpen(false)}
-                      className="w-full min-h-[44px] rounded-2xl bg-emerald-500 hover:bg-emerald-600 border-b-4 border-emerald-700 text-white font-display text-base font-bold shadow-md active:border-b-0 transition-colors cursor-pointer flex items-center justify-center gap-2"
-                    >
-                      <span>Simpan &amp; Tutup</span>
-                      {showShortcutLabels && (
-                        <span className="px-1.5 py-0.5 rounded bg-emerald-700/70 text-[10px] font-black font-mono">
-                          {getActionBadgeLabel('confirm', keyBindings)}
-                        </span>
-                      )}
-                    </button>
+                    <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1">
+                      <GameSettingsModalContent
+                        difficulty={difficulty}
+                        onChangeDifficulty={onChangeDifficulty}
+                        soundEnabled={soundEnabled}
+                        bgmEnabled={bgmEnabled}
+                        narratorEnabled={narratorEnabled}
+                        ambientEnabled={ambientEnabled}
+                        onToggleSound={onToggleSound}
+                        onToggleBgm={onToggleBgm}
+                        onToggleNarrator={onToggleNarrator}
+                        onToggleAmbient={onToggleAmbient}
+                        displayMode={displayMode}
+                        onChangeDisplayMode={onChangeDisplayMode}
+                        keyBindings={keyBindings}
+                        showShortcutLabels={showShortcutLabels}
+                        onUpdateKeyBinding={(action, code) =>
+                          onUpdateKeyBinding?.(action, code)
+                        }
+                        onResetKeyBindings={() => onResetKeyBindings?.()}
+                        onToggleShowShortcutLabels={() =>
+                          onToggleShowShortcutLabels?.()
+                        }
+                        onRecordingChange={setIsRecordingKey}
+                        isLicenseActive={isLicenseActive}
+                        licenseBadgeLabel={licenseBadgeLabel}
+                        licenseDetailText={licenseDetailText}
+                        onToggleLicense={onToggleLicense}
+                        onOpenLicenseModal={onOpenLicenseModal}
+                        showPwaInstall
+                      />
+                    </div>
+
+                    <div className="shrink-0 pt-3 mt-3 border-t border-stone-200/80">
+                      <button
+                        type="button"
+                        data-sfx="custom"
+                        data-kb-default="true"
+                        onClick={() => setIsSettingsOpen(false)}
+                        className="w-full min-h-[44px] rounded-2xl bg-emerald-500 hover:bg-emerald-600 border-b-4 border-emerald-700 text-white font-display text-base font-bold shadow-md active:border-b-0 transition-colors cursor-pointer flex items-center justify-center gap-2"
+                      >
+                        <span>Simpan &amp; Tutup</span>
+                        {showShortcutLabels && (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-700/70 text-[10px] font-black font-mono">
+                            {getActionBadgeLabel('confirm', keyBindings)}
+                          </span>
+                        )}
+                      </button>
+                    </div>
                   </motion.div>
                 </motion.div>
               )}
